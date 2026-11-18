@@ -1,0 +1,184 @@
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import type { ClawdAnimation } from "./animation.ts";
+import { CLAWD_COLUMNS, ClawdPortrait, FALLBACK_COLUMNS, FALLBACK_ROWS } from "./sprite.ts";
+
+export const CLAWD_FOOTER_KEY = "pi-cc-clawd";
+/** Private-use marker, replaced before any compatible footer reaches the terminal. */
+export const CLAWD_PLACEHOLDER = "\ue000";
+export type FooterFactory = NonNullable<Parameters<ExtensionContext["ui"]["setFooter"]>[0]>;
+
+/** Remove only our marker and a separator actually adjacent to it. */
+export function removeFooterMarker(line: string): string {
+	const at = line.indexOf(CLAWD_PLACEHOLDER);
+	if (at < 0) return line;
+	const before = line.slice(0, at);
+	const after = line.slice(at + CLAWD_PLACEHOLDER.length);
+	const separator = before.lastIndexOf(" · ");
+	if (separator >= 0 && stripTerminalSequences(before.slice(separator + 3)).trim() === "") {
+		return before.slice(0, separator) + before.slice(separator + 3) + after;
+	}
+	// The marker can be the first chip after indentation/ANSI styling. In that
+	// case the separator on its right becomes dangling and must be removed too.
+	if (stripTerminalSequences(before).trim() === "" && after.startsWith(" · ")) return before + after.slice(3);
+	return before + after;
+}
+
+/** Preserve footer text, but use the actual image's physical width for right alignment. */
+export function rightAlignGlyph(line: string, glyph: string, width: number): string {
+	if (width < CLAWD_COLUMNS + 1) return truncateToWidth(line, width);
+	const text = truncateToWidth(line, Math.max(0, width - CLAWD_COLUMNS - 1));
+	const padding = " ".repeat(Math.max(0, width - CLAWD_COLUMNS - visibleWidth(text)));
+	return text + padding + glyph;
+}
+
+/**
+ * Decorate a captured footer, never replace its model/usage/git rendering. Only
+ * line two may contain the marker: native footer puts extension statuses on line
+ * three, so it is intentionally not treated as a compatible two-line footer.
+ */
+export function decorateFooter<T extends Component>(base: T, portrait: ClawdPortrait, onIncompatible?: () => void): T {
+	const bound = new Map<PropertyKey, { original: Function; value: Function }>();
+	return new Proxy(base, {
+		get(target, key, receiver) {
+			if (key === "render") return (width: number) => {
+				const rendered = base.render(width);
+				if (rendered.length < 2 || !rendered[1].includes(CLAWD_PLACEHOLDER)) {
+					onIncompatible?.();
+					return rendered.map(line => line.includes(CLAWD_PLACEHOLDER) ? removeFooterMarker(line) : line);
+				}
+				const lines = rendered.map(line => line.includes(CLAWD_PLACEHOLDER) ? removeFooterMarker(line) : line);
+				const cleaned = lines[1];
+				const glyph = portrait.renderGlyph();
+				if (glyph.length === 2) {
+					// One image spans the rightmost columns of BOTH existing rows. Each
+					// row carries selectable placeholder cells, never another image upload.
+					return [rightAlignGlyph(lines[0], glyph[0], width), rightAlignGlyph(cleaned, glyph[1], width), ...lines.slice(2)];
+				}
+				return [lines[0], glyph.length === 1 ? rightAlignGlyph(cleaned, glyph[0], width) : truncateToWidth(cleaned, width), ...lines.slice(2)];
+			};
+			const value = Reflect.get(target, key, receiver);
+			if (typeof value !== "function" || key === "constructor" || Object.hasOwn(target, key)) return value;
+			const previous = bound.get(key);
+			if (previous && previous.original === value) return previous.value;
+			const method = value.bind(target);
+			bound.set(key, { original: value, value: method });
+			return method;
+		},
+		set(target, key, value) { return Reflect.set(target, key, value, target); },
+	});
+}
+
+/** Optional renderer integration with a native below-editor fallback. */
+export class FooterPlacement {
+	private readonly originalSetFooter: ExtensionContext["ui"]["setFooter"];
+	private portrait: ClawdPortrait | undefined;
+	private portraitKind: "footer" | "widget" | undefined;
+	private view: Component | undefined;
+	private requestRender: (() => void) | undefined;
+	private capturedFooter = false;
+	private mounted: "footer" | "widget" | undefined;
+	private fallbackQueued = false;
+	private disposed = false;
+
+	constructor(private readonly ctx: ExtensionContext, private readonly animation: ClawdAnimation) {
+		this.originalSetFooter = ctx.ui.setFooter;
+	}
+
+	/** Run in session_start so a later custom footer factory can be captured. */
+	prepare(): void {
+		this.ctx.ui.setFooter = factory => {
+			if (!factory) {
+				this.capturedFooter = false;
+				this.originalSetFooter(undefined);
+				// A footer may be disabled while Pi is running. Do not leave our
+				// private marker in the native footer's third status line.
+				if (!this.disposed && this.mounted === "footer") this.mount("widget");
+				return;
+			}
+			this.capturedFooter = true;
+			this.originalSetFooter((tui, theme, data) => {
+				if (this.disposed) return factory(tui, theme, data);
+				const portrait = this.ensurePortrait(tui, "footer");
+				const base = factory(tui, theme, data);
+				this.view = decorateFooter(base, portrait, () => {
+					// Hiding Clawd intentionally removes the marker; that is not an
+					// incompatible footer and must not trigger the widget fallback.
+					if (this.animation.getState().enabled) this.queueWidgetFallback();
+				});
+				this.requestRender = () => tui.requestRender();
+				this.mount("footer");
+				return this.view;
+			});
+		};
+	}
+
+	/** Run after all startup handlers, once footer factories have had a chance to register. */
+	mountDefault(): void {
+		if (this.disposed) return;
+		if (this.capturedFooter) this.mount("footer");
+		else this.mount("widget");
+	}
+
+	refresh(): void {
+		const enabled = this.animation.getState().enabled;
+		if (!enabled) this.portrait?.resetUpload();
+		if (this.mounted === "footer") this.ctx.ui.setStatus(CLAWD_FOOTER_KEY, enabled ? CLAWD_PLACEHOLDER : undefined);
+		this.view?.invalidate();
+		// Also redraw on hide, removing the last placeholder cells from the footer.
+		this.requestRender?.();
+	}
+
+	dispose(): void {
+		if (this.disposed) return;
+		this.disposed = true;
+		this.ctx.ui.setFooter = this.originalSetFooter;
+		this.ctx.ui.setWidget(CLAWD_FOOTER_KEY, undefined);
+		this.ctx.ui.setStatus(CLAWD_FOOTER_KEY, undefined);
+		this.view = undefined;
+		this.portrait?.dispose();
+		this.portrait = undefined;
+		this.portraitKind = undefined;
+		this.requestRender = undefined;
+		this.mounted = undefined;
+	}
+
+	private mount(kind: "footer" | "widget"): void {
+		if (this.disposed || this.mounted === kind) return;
+		this.mounted = kind;
+		if (kind === "footer") {
+			this.ctx.ui.setWidget(CLAWD_FOOTER_KEY, undefined);
+			this.ctx.ui.setStatus(CLAWD_FOOTER_KEY, this.animation.getState().enabled ? CLAWD_PLACEHOLDER : undefined);
+			return;
+		}
+		this.ctx.ui.setStatus(CLAWD_FOOTER_KEY, undefined);
+		this.ctx.ui.setWidget(CLAWD_FOOTER_KEY, (tui, theme) => {
+			this.view = this.ensurePortrait(tui, "widget");
+			this.requestRender = () => tui.requestRender();
+			return this.view;
+		}, { placement: "belowEditor" });
+	}
+
+	private queueWidgetFallback(): void {
+		if (this.disposed || this.fallbackQueued || this.mounted === "widget") return;
+		this.fallbackQueued = true;
+		queueMicrotask(() => {
+			this.fallbackQueued = false;
+			if (!this.disposed && this.mounted !== "widget") this.mount("widget");
+		});
+	}
+
+	private ensurePortrait(tui: TUI, kind: "footer" | "widget"): ClawdPortrait {
+		if (!this.portrait || this.portraitKind !== kind) {
+			this.portrait?.dispose();
+			this.portrait = new ClawdPortrait(
+				() => this.animation.getState(), () => this.ctx.ui.theme, () => tui.terminal.rows,
+				kind === "widget"
+					? { columns: FALLBACK_COLUMNS, rows: FALLBACK_ROWS }
+					: { placeholders: { write: data => tui.terminal.write(data), fullRedraws: () => tui.fullRedraws } },
+			);
+			this.portraitKind = kind;
+		}
+		return this.portrait;
+	}
+}

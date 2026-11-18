@@ -1,0 +1,57 @@
+{
+  "name": "pi-cc-clawd",
+  "version": "0.4.1",
+  "description": "An animated 8×2 Clawd with official sprite decoding and Agent-state reactions in Pi's two-line footer.",
+  "author": "tarnish233",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tarnish233/pi-cc-clawd.git"
+  },
+  "homepage": "https://github.com/tarnish233/pi-cc-clawd#readme",
+  "bugs": {
+    "url": "https://github.com/tarnish233/pi-cc-clawd/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "clawd",
+    "claude-code"
+  ],
+  "files": [
+    "*.ts",
+    "assets/*.json",
+    "assets/README.md",
+    "scripts/*.mjs",
+    "tests/*.mjs",
+    "tsconfig.json",
+    "LICENSE",
+    "NOTICE",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
+    "preview": "node scripts/preview.mjs"
+  }
+}

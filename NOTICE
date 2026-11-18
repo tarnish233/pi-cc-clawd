@@ -1,0 +1,18 @@
+Clawd is the mascot of Anthropic's Claude Code. "Claude" and "Clawd" and the
+character design belong to Anthropic. This is an unofficial fan extension,
+not affiliated with or endorsed by Anthropic.
+
+The built-in idle silhouette follows the publicly visible Clawd pixel design.
+Rendering, PNG generation, sprite decoding and Agent-state playback code are
+implemented in this project.
+
+assets/official-sprites.json contains the official base-and-delta animation
+catalogue extracted read-only from Claude macOS 6.6395.0's Clawd Quest engine.
+That catalogue and the underlying character animation artwork belong to
+Anthropic and are not relicensed under this project's MIT license. No GIF or
+rasterized official animation bundle is included; official frames are decoded
+and rasterized locally from that catalogue.
+
+The MIT license covers this project's original code only, not Anthropic's
+trademarks, character rights, or official animation data. See assets/README.md
+for source and integrity information.
