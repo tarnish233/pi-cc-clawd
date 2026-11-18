@@ -1,159 +1,92 @@
 # pi-cc-clawd
 
-一只待在 **Pi footer 两行右侧**、会随 Agent 状态做小动作的 Clawd。
+Pi footer 右侧的 Clawd：跟着 Agent 状态做小动作的官方像素动画。默认 **8 列 × 2 行**，不增加 footer 行数。
 
-默认 **8 列 × 2 行**。待机时保持低打扰，生成、工具调用、完成、compact 和出错时播放对应的官方像素动画。不加卡片、背景、标题或任务状态文字；只有画布超过 footer 高度的动画，才会借用 prompt 输入框右下角的两行空白（见下文“高画布动画”）。
+## 兼容性（重要）
 
-## 外观与布局
+**必须使用支持 Kitty 图像协议的终端**，例如 Rex、Kitty、Ghostty。
 
-- 固定的 **24×16 原始像素基准**，缩小时不重新设计头身、手臂和腿的比例。
-- **Rex、Kitty、Ghostty 等支持 Kitty 图像协议的终端：8 列 × 2 行**，透明 PNG 等比例缩小，保留清晰像素边缘。footer 使用 Unicode 图片占位符，两行文字都可正常选择、复制。
-- 根据真实字符单元的像素尺寸生成 PNG；必要留白，不拉伸角色。
-- 图标右侧固定留 **1 列空白**：部分终端（如 Rex）会丢失最后一列单元格的组合字符，占位符贴到最右列时右边会被裁掉。留白后 8 列占位符都能正常渲染。
-- 在你的 `pi-cc-extensions` 两行 footer 中，Clawd 横跨两行右侧的 8 列，**不增加第三行**。两行左侧分别预留空间，不遮住模型、目录或 Git 信息。
-- 画布高于 footer 的动画会临时使用一个 **8 列 × 2 行的非捕获 overlay**，叠在编辑器最后两行（底边框 + 输入行）的右侧空白上，与 footer 图标共用同样的右侧 1 列留白；图片仍是从 footer 底部向上连续的 **8 列 × 4 行**舞台，标准体型（2.25 倍）不变。overlay 只在前述动画播放时存在，其余时间完全移除。
-- 没有捕获到兼容的自定义 footer 时，使用 Pi 原生 `belowEditor` 组件兜底，尺寸为 **4 列 × 1 行**；不再装饰 prompt 输入框。
-- 字符终端的兜底组件保留原始轮廓，不为强行塞进一行而压坏造型。
-- 空闲时每隔约 **4.5–8 秒** 偶尔眨眼、张望或播放一组短动画；工作和工具状态使用官方 12fps 帧序列。
-- 输入框、编辑器、原 footer 的模型／上下文／费用／目录／Git 等信息均不由本扩展重绘。
+- 本扩展通过 Kitty 的 Unicode 占位符（`U=1`）把图片放进 footer 单元格；iTerm2 的 OSC 1337 等协议没有等价的单元格网格，因此无法替代。
+- **不支持 Kitty 协议的终端没有完整功能**：footer 里不会显示 Clawd，高画布的 overlay 舞台也不会出现；`/clawd` 命令仍可执行，但没有可见效果。
+- 唯一的例外：没有捕获到兼容 footer、退回 `belowEditor` widget 时，非 Kitty 终端会用 4 行半方块文本显示角色。
+- 图片能力由 Pi 自动探测，不会向不支持的终端发送图片序列，也不会残留占位符字符。
 
-图片能力由 Pi 自动探测，不强制开启终端不支持的协议。窄终端中自动隐藏兜底组件；footer 文本过宽时优先压缩文本，不改变小图标比例。
+## 外观
 
-## 动画与 Agent 状态
+- 固定的 **24×16 官方轮廓**，按真实字符单元像素等比缩放，不重画头身比例。
+- footer 右侧 8 列 × 2 行，透明 PNG；Unicode 占位符让两行 footer 文字都能正常选择、复制。
+- 图标右侧固定留 **1 列空白**：部分终端会丢失行尾单元格的组合字符，贴边时右钳会被裁掉。
+- 画布高于 footer 的动画临时使用 **8 列 × 2 行非捕获 overlay**，叠在编辑器底边框 + 输入行的右侧空白上，与 footer 组成 **8×4 舞台**；主体保持 2.25 倍标准体型，不放大也不压扁。overlay 只在播放期间存在，其余时间完全移除。
+- 没有捕获到兼容的两行 footer 时，用 `belowEditor` 4×1 兜底（Kitty 图片或 4 行文本半方块），不重绘编辑器。
 
-内置官方 **6.6395.0** 的 base＋delta 动画目录，全部 **25 组**都能按需解码、校验和生成 RGBA 帧。源画布不超过 18 像素的 **15 组**沿用原来的 8×2 footer 构图；其余 **10 组**使用 8×2 overlay + footer 组成的 8×4 舞台，主体尺寸仍锁定在标准 24×16 的 2.25 倍，不会被放大，也不会被压扁。
+## 动画与状态
 
-状态机仍只使用上面 15 组，避免 Agent 工作中角色尺寸变化；高画布动画通过 `/clawd play` 单次播放。
+官方 **6.6395.0** 的 base＋delta 目录，**25 组**全部可按需解码和播放。
 
-| 状态 | 动画与播放方式 |
+| 状态 | 动画 |
 | --- | --- |
-| Agent 生成中 | Desktop：开场后循环工作片段 |
-| 工具执行中 | CrabWalking：循环；并行工具全部结束后才返回生成状态 |
-| 完成 | DancingHappy：播放一次后回到待机 |
-| compact | Meditating：循环 |
-| 出错 | Facepalm：播放一次后恢复当前状态 |
-| 空闲 | 原生眨眼／张望，以及随机 Core 小动作 |
+| Agent 生成中 | `Desktop` 循环 |
+| 工具执行中 | `CrabWalking` 循环，并行工具全部结束后才返回生成状态 |
+| 完成 | `DancingHappy` 一次 |
+| compact | `Meditating` 循环 |
+| 出错 | `Facepalm` 一次后恢复当前状态 |
+| 空闲 | 原生眨眼／张望 + 随机短动画（约 4.5–8 秒一次） |
 
-这些状态直接来自 Pi 的 `agent_start`、`agent_settled`、`tool_execution_*`、`turn_end` 和 compact 事件，**不让模型判断动画状态，也不产生额外模型请求**。
+状态直接来自 Pi 的 `agent_start`、`agent_settled`、`tool_execution_*`、`turn_end` 和 compact 事件：**不让模型判断动画，也不产生额外模型请求**。
 
-`/clawd play <名称>` 现在支持全部 25 组，补全列表也列出全部名称。
+状态机只使用 15 组短画布动画，避免工作中角色尺寸变化。另外 10 组高画布通过 `/clawd play` 单次播放：
 
-### 高画布动画
-
-`BreakDancing`、`Confetti`、`Jumping`、`JumpingHappy`、`Laptop`、`Lightbulb`、`Pointing`、`Spark`、`Thinking`、`Waving` 的画布高 21–37 行，会使用 overlay 舞台：
-
-- `Waving`、`Pointing`、`Thinking`、`Jumping`、`JumpingHappy`、`Lightbulb` 在 8×4 舞台内保持 100% 标准体型；`Laptop`、`BreakDancing` 约 94%，`Spark` 约 91%。
-- `Confetti` 画布宽 41 像素，受 8 列（72 像素）宽度限制，最高约 78%。
-- overlay 只覆盖编辑器底边框和输入行的右侧 8 列：有像素的格子放占位符，其余格子用 `borderMuted` 的 `─` 补回边框；因此边框只在角色真正穿过的地方断开。
-- 终端不支持 Kitty 占位符、宽度不足、或没有可用的编辑器行时，overlay 自动不启用，这些动画退回 8×2 等比缩小。存在 `belowEditor` widget 时 overlay 会压到 widget 上。
-- overlay 播放期间，选中编辑器最后一行右侧有像素的格子可能带出占位符字符；footer 两行的选择与复制不受影响。
-
-播放使用一个可取消定时器，不为每一帧建立独立循环。`/clawd pause` 会停止自动状态动画；暂停期间仍可手动播放一次，结束后保持暂停。`/clawd off`、reload 和会话退出会取消帧计时器。
-
-## 安装与加载顺序
-
-需要 **Pi 1.5.2 或更新版本**、Node.js 22.19 或更新版本；运行时无额外依赖。
-
-从 npm 安装：
-
-```bash
-pi install npm:pi-cc-clawd
-```
-
-固定到本次发布版本：
-
-```bash
-pi install npm:pi-cc-clawd@0.4.1
-```
-
-也可以从 GitHub 安装：
-
-```bash
-pi install git:github.com/tarnish233/pi-cc-clawd@v0.4.1
-```
-
-为了复用 `pi-cc-extensions` 的 footer，本扩展需要**先于它注册**。安装后检查 `~/.pi/agent/settings.json`，将本扩展放在 `pi-cc-extensions` 前面：
-
-```json
-{
-  "packages": [
-    "/absolute/path/to/pi-cc-clawd",
-    "npm:pi-web-access",
-    "npm:pi-cc-extensions"
-  ]
-}
-```
-
-这里只表示顺序，已有的其他 package 保持不变。也可以使用 `pi install /absolute/path/to/pi-cc-clawd`，然后检查 `~/.pi/agent/settings.json` 中的顺序。
-
-**只保留一种安装来源**，不要同时使用软链接、package 安装和 `-e`，避免两个实例同时装饰 footer。修改后在 Pi 中执行 `/reload`。
-
-临时试用：
-
-```bash
-pi -e ./pi-cc-clawd -e npm:pi-cc-extensions
-```
-
-`-e` 按给定顺序加载。若另一个 footer 在本扩展之前已经完成注册，则本扩展不会强行替换它，而是走原生 `belowEditor` 兜底。
+- `Waving`、`Pointing`、`Thinking`、`Jumping`、`JumpingHappy`、`Lightbulb`：100%
+- `Laptop`、`BreakDancing`：94%，`Spark`：91%
+- `Confetti`：78%（画布 41px 宽，受 8 列宽度上限限制）
 
 ## 命令
 
 | 命令 | 作用 |
 | --- | --- |
 | `/clawd` | 显示／隐藏 |
-| `/clawd on` | 显示 |
-| `/clawd off` | 隐藏并停止动画计时器 |
-| `/clawd pause` | 保持站立，停止自动动作 |
-| `/clawd resume` | 显示并恢复当前 Agent 状态对应的动画 |
-| `/clawd blink` | 眨眼一次；暂停状态下也可用 |
-| `/clawd play <名称>` | 播放一次上述 15 组之一，例如 `/clawd play DancingHappy`；暂停状态下也可用 |
+| `/clawd on` / `off` | 显示／隐藏并停止计时器 |
+| `/clawd pause` / `resume` | 停止／恢复自动状态动画 |
+| `/clawd blink` | 眨眼一次（暂停也可用） |
+| `/clawd play <名称>` | 播放任意一组官方动画，补全列出全部 25 组 |
 
-显示和动画偏好作为本会话的扩展条目保存，`/reload` 或恢复该会话后保留。新会话默认显示并启用轻量动画；`/tree` 根据当前分支恢复偏好。
+偏好作为本会话的扩展条目保存，`/reload` 或恢复会话后保留。命令不调用模型、不发聊天消息、不消耗 token，也不重建编辑器或清除输入草稿。
 
-这些命令不调用模型、不发送聊天消息，也不消耗 token。开关不会重建编辑器或清除输入草稿、撤销记录和历史。
+## 安装
 
-## 与现有 footer 共存
-
-Pi 没有 footer getter，且 `pi-cc-extensions` 的 `setStatus` 通道会处理颜色、剥离终端序列，不能把图片协议直接塞进去。因此本扩展采用以下方式：
-
-1. 在 `session_start` 阶段包装 `ctx.ui.setFooter`，等待后注册的自定义 footer 工厂。
-2. 用保留的 key 向 `footerData` 提供一个不对外显示的占位符。
-3. 在实际 footer 组件的渲染结果中，只替换**第二行**的占位符，并按图片的真实物理宽度右对齐。
-4. 两行只在右侧预留图片区域，左侧原文和第三行不改；不替换 footer 工厂，不读取或修改 `pi-cc-extensions` 的配置文件。
-5. 所有 `session_start` 完成后才启动轻量动画；隐藏时移除占位和图像，reload／退出时恢复原始 `setFooter` 并清理计时器。
-
-原生 footer 把扩展状态放在第三行，不会误当成兼容的两行 footer。其他自定义 footer 只有在第二行提供对应占位时才会被装饰，避免覆盖第三方布局。
-
-- 不调用 `setEditorComponent()`，不修改 prompt 编辑器、补全、快捷键或输入历史。
-- footer 图片数据在渲染文本之外传输，两行只包含普通文字和 Unicode 图片占位符；相同帧不会因 footer 文字刷新而删除、重传，全屏重绘后会恢复图像数据。
-- 4×1 `belowEditor` 兜底继续使用 Pi 原生 `Image` 组件，不改变其布局或鼠标坐标。
-- TUI 模式才建立界面和计时器；RPC、JSON 和 print 模式不渲染、不启动后台资源。
-- 一次最多一个可取消且 `unref()` 的定时器；动作共用一个图像 ID，只在帧、动作或字号变化时更新数据。
-- 官方帧按需解码和缓存；PNG 在内存中生成，无网络请求，也不读取本机 Claude 安装包。
-
-## 开发与验证
-
-测试使用本机 Pi 的真实组件和 Jiti，不启动模型请求。可通过 `PI_CC_CLAWD_HOST_NODE_MODULES` 指定 Pi 安装目录。
+需要 **Pi 1.5.2+**、**Node.js 22.19+**；运行时无额外依赖。
 
 ```bash
-npm test
+pi install npm:pi-cc-clawd
+```
+
+本扩展必须**注册在 `pi-cc-extensions` 之前**，否则捕获不到它的 footer，会退回 `belowEditor` 兜底。检查 `~/.pi/agent/settings.json` 的 `packages` 顺序即可（只调整顺序，不改动其他 package）：
+
+```json
+{ "packages": ["npm:pi-cc-clawd", "npm:pi-cc-extensions"] }
+```
+
+只保留一种安装来源，不要同时用软链接、package 安装和 `-e`。改完在 Pi 里执行 `/reload`。
+
+## 已知限制
+
+- overlay 会覆盖编辑器最后两行的右侧 8 列：存在 `belowEditor` widget 时会压到 widget；自动补全或 `/` 菜单展开时右侧 8 列可能被遮住。
+- 播放高画布动画期间，选中编辑器最后一行右侧有像素的格子可能复制出占位符字符；footer 两行的复制不受影响。
+- 非 Kitty 终端没有 footer 显示（见上）。
+
+## 开发
+
+测试使用本机 Pi 的真实组件和 Jiti，不发起模型请求。
+
+```bash
 npm install --legacy-peer-deps
+npm test
 npm run typecheck
 npm run preview
 ```
 
-没有在本项目安装 TypeScript 时，也可以复用本机编译器：
+当前 **81 个测试**通过，覆盖：全部 25 组素材的 base／delta 解码、15 组 footer 动画、8×4 舞台（占位符行号、体型不变性、边框掩码、overlay 生命周期）、Agent 状态转换、并行工具、偏好恢复、PNG／文本渲染、footer 尺寸与 fallback，以及 regular/fullscreen 两种真实渲染器上的选择与复制。
 
-```bash
-PI_TYPESCRIPT_PATH=/path/to/typescript/lib/typescript.js npm run typecheck
-```
+## 版权
 
-测试覆盖全部 25 组官方素材的 base／delta 解码、15 组 footer 动画、Agent 状态转换、并行工具、暂停恢复、手动播放、RGBA PNG／字符渲染，以及 footer 的固定 8×2 尺寸、4×1 原生 fallback、图像缓存、偏好恢复和定时器清理。另有普通 footer 更新不删图、全屏重绘恢复、真实 fullscreen 鼠标选择与复制测试。
-
-本机存在 `pi-cc-extensions` 时，还会直接加载其真实 footer 组件验证两行内容保留和图片接入；不会修改该包或其配置。
-
-## 版权与说明
-
-这是非官方的粉丝扩展，与 Anthropic 无官方关联。角色设计、Claude 与 Clawd 名称归 Anthropic。
-
-角色轮廓按原始像素基准表达，渲染、解码和状态播放逻辑在本项目实现，PNG 在内存中生成。`assets/official-sprites.json` 包含从 Claude 6.6395.0 只读提取的官方 base＋delta 动画目录，不包含 GIF 或栅格化动画包。MIT 许可只覆盖本项目原创代码，不覆盖 Anthropic 的商标、角色权利或官方动画数据。详见 [NOTICE](NOTICE) 与 [assets/README.md](assets/README.md)。
+非官方粉丝扩展，与 Anthropic 无官方关联；Claude、Clawd 名称和角色归 Anthropic。`assets/official-sprites.json` 包含从 Claude 6.6395.0 只读提取的官方 base＋delta 动画数据；MIT 只覆盖本项目原创代码。详见 [NOTICE](NOTICE) 与 [assets/README.md](assets/README.md)。
