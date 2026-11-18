@@ -2,14 +2,16 @@
 
 一只待在 **Pi footer 两行右侧**、会随 Agent 状态做小动作的 Clawd。
 
-默认 **8 列 × 2 行**。待机时保持低打扰，生成、工具调用、完成、compact 和出错时播放对应的官方像素动画。不加卡片、背景、标题或任务状态文字，也不占用 prompt 输入框上方空间。
+默认 **8 列 × 2 行**。待机时保持低打扰，生成、工具调用、完成、compact 和出错时播放对应的官方像素动画。不加卡片、背景、标题或任务状态文字；只有画布超过 footer 高度的动画，才会借用 prompt 输入框右下角的两行空白（见下文“高画布动画”）。
 
 ## 外观与布局
 
 - 固定的 **24×16 原始像素基准**，缩小时不重新设计头身、手臂和腿的比例。
 - **Rex、Kitty、Ghostty 等支持 Kitty 图像协议的终端：8 列 × 2 行**，透明 PNG 等比例缩小，保留清晰像素边缘。footer 使用 Unicode 图片占位符，两行文字都可正常选择、复制。
 - 根据真实字符单元的像素尺寸生成 PNG；必要留白，不拉伸角色。
+- 图标右侧固定留 **1 列空白**：部分终端（如 Rex）会丢失最后一列单元格的组合字符，占位符贴到最右列时右边会被裁掉。留白后 8 列占位符都能正常渲染。
 - 在你的 `pi-cc-extensions` 两行 footer 中，Clawd 横跨两行右侧的 8 列，**不增加第三行**。两行左侧分别预留空间，不遮住模型、目录或 Git 信息。
+- 画布高于 footer 的动画会临时使用一个 **8 列 × 2 行的非捕获 overlay**，叠在编辑器最后两行（底边框 + 输入行）的右侧空白上，与 footer 图标共用同样的右侧 1 列留白；图片仍是从 footer 底部向上连续的 **8 列 × 4 行**舞台，标准体型（2.25 倍）不变。overlay 只在前述动画播放时存在，其余时间完全移除。
 - 没有捕获到兼容的自定义 footer 时，使用 Pi 原生 `belowEditor` 组件兜底，尺寸为 **4 列 × 1 行**；不再装饰 prompt 输入框。
 - 字符终端的兜底组件保留原始轮廓，不为强行塞进一行而压坏造型。
 - 空闲时每隔约 **4.5–8 秒** 偶尔眨眼、张望或播放一组短动画；工作和工具状态使用官方 12fps 帧序列。
@@ -19,7 +21,9 @@
 
 ## 动画与 Agent 状态
 
-内置官方 **6.6395.0** 的 base＋delta 动画目录，全部 **25 组**都能按需解码、校验和生成 RGBA 帧。8×2 footer 第一版只启用源画布高度不超过 18 像素的 **15 组**，避免把主体缩得过小或让 footer 高度抖动。
+内置官方 **6.6395.0** 的 base＋delta 动画目录，全部 **25 组**都能按需解码、校验和生成 RGBA 帧。源画布不超过 18 像素的 **15 组**沿用原来的 8×2 footer 构图；其余 **10 组**使用 8×2 overlay + footer 组成的 8×4 舞台，主体尺寸仍锁定在标准 24×16 的 2.25 倍，不会被放大，也不会被压扁。
+
+状态机仍只使用上面 15 组，避免 Agent 工作中角色尺寸变化；高画布动画通过 `/clawd play` 单次播放。
 
 | 状态 | 动画与播放方式 |
 | --- | --- |
@@ -32,9 +36,17 @@
 
 这些状态直接来自 Pi 的 `agent_start`、`agent_settled`、`tool_execution_*`、`turn_end` 和 compact 事件，**不让模型判断动画状态，也不产生额外模型请求**。
 
-可手动播放的 15 组为：`CrabWalking`、`DancingHappy`、`Desktop`、`Disappointed`、`Dizzy`、`Excited`、`Facepalm`、`Hula`、`LookingAround`、`LookingAroundEyesOnly`、`Meditating`、`Running`、`Swaying`、`Turning`、`Walking`。
+`/clawd play <名称>` 现在支持全部 25 组，补全列表也列出全部名称。
 
-`BreakDancing`、`Confetti`、`Jumping`、`JumpingHappy`、`Laptop`、`Lightbulb`、`Pointing`、`Spark`、`Thinking`、`Waving` 因画布超过 18 像素而在本版跳过；它们仍可被解码层读取，但不会被 8×2 footer 或 `/clawd play` 显示。
+### 高画布动画
+
+`BreakDancing`、`Confetti`、`Jumping`、`JumpingHappy`、`Laptop`、`Lightbulb`、`Pointing`、`Spark`、`Thinking`、`Waving` 的画布高 21–37 行，会使用 overlay 舞台：
+
+- `Waving`、`Pointing`、`Thinking`、`Jumping`、`JumpingHappy`、`Lightbulb` 在 8×4 舞台内保持 100% 标准体型；`Laptop`、`BreakDancing` 约 94%，`Spark` 约 91%。
+- `Confetti` 画布宽 41 像素，受 8 列（72 像素）宽度限制，最高约 78%。
+- overlay 只覆盖编辑器底边框和输入行的右侧 8 列：有像素的格子放占位符，其余格子用 `borderMuted` 的 `─` 补回边框；因此边框只在角色真正穿过的地方断开。
+- 终端不支持 Kitty 占位符、宽度不足、或没有可用的编辑器行时，overlay 自动不启用，这些动画退回 8×2 等比缩小。存在 `belowEditor` widget 时 overlay 会压到 widget 上。
+- overlay 播放期间，选中编辑器最后一行右侧有像素的格子可能带出占位符字符；footer 两行的选择与复制不受影响。
 
 播放使用一个可取消定时器，不为每一帧建立独立循环。`/clawd pause` 会停止自动状态动画；暂停期间仍可手动播放一次，结束后保持暂停。`/clawd off`、reload 和会话退出会取消帧计时器。
 

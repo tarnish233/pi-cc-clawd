@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { ClawdAnimation, type Schedule } from "./animation.ts";
 import { FooterPlacement } from "./footer-adapter.ts";
-import { FOOTER_SPRITE_NAMES, OFFICIAL_SPRITE_NAMES, isFooterSpriteName } from "./official-sprites.ts";
+import { OFFICIAL_SPRITE_NAMES } from "./official-sprites.ts";
 import { PREFERENCES_ENTRY, readPreferences } from "./preferences.ts";
 
 export interface ClawdExtensionOptions {
@@ -67,7 +67,7 @@ export function createClawdExtension(options: ClawdExtensionOptions = {}) {
 			getArgumentCompletions: (prefix) => {
 				if (prefix.startsWith("play ")) {
 					const name = prefix.slice(5).trimStart().toLowerCase();
-					const items = FOOTER_SPRITE_NAMES.filter(value => value.toLowerCase().startsWith(name));
+					const items = OFFICIAL_SPRITE_NAMES.filter(value => value.toLowerCase().startsWith(name));
 					return items.length ? items.map(value => ({ value: "play " + value, label: value })) : null;
 				}
 				const items = ["on", "off", "pause", "resume", "blink", "play"].filter((value) => value.startsWith(prefix));
@@ -83,8 +83,6 @@ export function createClawdExtension(options: ClawdExtensionOptions = {}) {
 					const name = OFFICIAL_SPRITE_NAMES.find(value => value.toLowerCase() === requested.toLowerCase());
 					if (!name) {
 						ctx.ui.notify("Usage: /clawd play <animation>; e.g. /clawd play DancingHappy", "info");
-					} else if (!isFooterSpriteName(name)) {
-						ctx.ui.notify(`${name} is skipped in the 8×2 footer because its canvas is taller than 18 pixels.`, "info");
 					} else if (!animation.playOfficial(name)) {
 						ctx.ui.notify(animation.getState().enabled ? "Clawd is not ready yet; try again after startup." : "Enable Clawd before playing an animation.", "info");
 					}

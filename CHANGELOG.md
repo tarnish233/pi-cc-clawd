@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 - 2026-11-18
+
+- Enable all 25 official clips for `/clawd play`; the 15 compact canvases keep the original 8×2 framing.
+- Add a non-capturing 8×2 overlay above the footer so tall canvases render in an 8×4 stage at the canonical body size, borrowing the editor's blank right margin without adding layout rows.
+- Mask overlay cells per frame, keep cells the sprite does not cross filled with the editor's own border glyph, and never enlarge or squash the character.
+- Tie the overlay to tall clips only, remove it between clips, and fall back to the 8×2 fit when Kitty placeholders or the editor rows are unavailable.
+- Reserve one blank column after the footer glyph: Rex drops the trailing cell's combining diacritics, which clipped the sprite's right arm in every previous version.
+- Add stage coverage for placeholder rows, body-size invariance, border masking, overlay lifecycle and both real renderers (81 tests total).
+
 ## 0.4.1 - 2026-11-18
 
 - Sanitize the private marker on every incompatible footer line, mount the native widget fallback, and remove only separators adjacent to the marker instead of corrupting footer text.

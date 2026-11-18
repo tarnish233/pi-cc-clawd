@@ -1,7 +1,22 @@
 import { crc32, deflateSync } from "node:zlib";
 
 export type Rgba = readonly [number, number, number, number];
+export interface RgbaFit {
+	scale: number;
+	left: number;
+	top: number;
+}
 const SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+/**
+ * Nearest-neighbor fit shared by the encoder and the placeholder cell mask.
+ * `maxScale` keeps every animation at the size of the canonical 24 x 16 body.
+ */
+export function fitRgba(sourceWidth: number, sourceHeight: number, width: number, height: number, maxScale = Infinity): RgbaFit {
+	const limit = Number.isFinite(maxScale) && maxScale > 0 ? maxScale : Infinity;
+	const scale = Math.min(width / sourceWidth, height / sourceHeight, limit);
+	return { scale, left: (width - sourceWidth * scale) / 2, top: height - sourceHeight * scale };
+}
 
 function chunk(type: string, data: Buffer): Buffer {
 	const name = Buffer.from(type, "ascii");
@@ -28,14 +43,13 @@ export function encodeRgbaPng(
 	pixels: readonly (readonly (Rgba | null)[])[],
 	width: number,
 	height: number,
+	maxScale = Infinity,
 ): Buffer {
 	const sourceHeight = pixels.length;
 	const sourceWidth = pixels[0]?.length ?? 0;
 	if (!sourceWidth || pixels.some(row => row.length !== sourceWidth)) throw new Error("Invalid pixel matrix");
 	if (![width, height].every(size => Number.isInteger(size) && size >= 1 && size <= 1024)) throw new Error("Invalid PNG size");
-	const scale = Math.min(width / sourceWidth, height / sourceHeight);
-	const left = (width - sourceWidth * scale) / 2;
-	const top = height - sourceHeight * scale;
+	const { scale, left, top } = fitRgba(sourceWidth, sourceHeight, width, height, maxScale);
 	const stride = width * 4 + 1;
 	const raw = Buffer.alloc(stride * height);
 	for (let y = 0; y < height; y++) {

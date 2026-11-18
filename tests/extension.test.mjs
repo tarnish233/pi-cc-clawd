@@ -4,7 +4,7 @@ import { FakeClock,extensionHarness,load } from "./helpers.mjs";
 const {createClawdExtension}=await load("index.ts");
 const {PREFERENCES_ENTRY}=await load("preferences.ts");
 const {CLAWD_PLACEHOLDER}=await load("footer-adapter.ts");
-const {FALLBACK_ROWS}=await load("sprite.ts");
+const {FALLBACK_ROWS,CLAWD_COLUMNS,CLAWD_ROWS,OVERLAY_ROWS}=await load("sprite.ts");
 
 async function setup(mode="tui",withFooter=false) {
 	const h=await extensionHarness(mode);const clock=new FakeClock();
@@ -22,7 +22,7 @@ test("factory only registers hooks; startup captures later footer without changi
 	assert.equal(h.editor.render(80).length,3);assert.equal(h.widget,undefined);
 	const lines=h.footer.render(80);assert.equal(lines.length,2);assert(lines[0].startsWith("model"));
 	assert(lines[0].includes("\u{10eeee}"));assert(lines.every(line=>!line.includes("\x1b_G")));assert(!lines[1].includes(CLAWD_PLACEHOLDER));const {visibleWidth}=await load("@earendil-works/pi-tui");
-	assert.equal(visibleWidth(lines[0].slice(0,lines[0].indexOf("\u{10eeee}"))),72);
+	assert.equal(visibleWidth(lines[0].slice(0,lines[0].indexOf("\u{10eeee}"))),71);
 	assert.match(h.tui.terminal.output,/a=T,U=1/);
 	await h.emit("session_shutdown");assert.equal(clock.jobs.size,0);assert.equal(h.statuses.size,0);
 });
@@ -99,8 +99,19 @@ test("agent events and play commands render official frames without touching the
 	assert.notEqual(h.tui.terminal.output,desktop);
 	await h.emitRaw("tool_execution_end",{toolCallId:"tool-1",isError:false});
 	await h.emitRaw("agent_settled",{aborted:false});clock.advance(3400);
-	await h.command("play Waving");assert.match(h.notices.at(-1)[0],/taller than 18 pixels/);
-	await h.command("play Hula");assert.equal(h.notices.length,1);assert.equal(clock.jobs.size,1);
+	await h.command("play Waving");assert.equal(h.notices.length,0);assert.equal(clock.jobs.size,1);
+	assert.equal(h.tui.overlays.length,1);
+	const overlay=h.tui.overlays[0];
+	assert.equal(overlay.options.anchor,"bottom-right");
+	assert.equal(overlay.options.width,CLAWD_COLUMNS);
+	assert.equal(overlay.options.maxHeight,OVERLAY_ROWS);
+	assert.equal(overlay.options.nonCapturing,true);
+	assert.deepEqual(overlay.options.margin,{right:1,bottom:CLAWD_ROWS});
+	clock.advance(900);
+	const stage=overlay.component.render(CLAWD_COLUMNS);
+	assert.equal(stage.length,1);assert(stage[0].includes("\u{10eeee}"));assert(stage[0].includes("─"));
+	await h.command("play Hula");assert.equal(h.notices.length,0);assert.equal(clock.jobs.size,1);
+	assert.equal(overlay.removed,true);
 	assert.equal(h.editorSets,0);assert(h.entries.every(entry=>entry.customType!=="clawd-animation"));
 	await h.emit("session_shutdown");assert.equal(clock.jobs.size,0);
 });
@@ -120,6 +131,6 @@ test("bad arguments and no-op controls don't persist entries or disturb other UI
 	const completions=h.commands.get("clawd").getArgumentCompletions("p");assert.deepEqual(completions,[{value:"pause",label:"pause"},{value:"play",label:"play"}]);
 	assert.deepEqual(h.commands.get("clawd").getArgumentCompletions("play Dan"),[{value:"play DancingHappy",label:"DancingHappy"}]);
 	assert.deepEqual(h.commands.get("clawd").getArgumentCompletions("play  Dan"),[{value:"play DancingHappy",label:"DancingHappy"}]);
-	assert.equal(h.commands.get("clawd").getArgumentCompletions("play ").length,15);
+	assert.equal(h.commands.get("clawd").getArgumentCompletions("play ").length,25);
 	await h.emit("session_shutdown");clock.advance(20000);assert.equal(clock.jobs.size,0);
 });

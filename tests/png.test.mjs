@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {load} from "./helpers.mjs";
 import {decodePng} from "./png-helpers.mjs";
-const {encodePixelPng}=await load("png.ts");
+const {encodePixelPng,fitRgba}=await load("png.ts");
 const {drawClawd,PIXEL_COLORS}=await load("sprite.ts");
 
 test("integer nearest-neighbor scaling reproduces every original source pixel",()=>{
@@ -30,4 +30,12 @@ test("PNG bounds reject malformed and excessive allocations",()=>{
 	const source=drawClawd("standing");
 	for(const size of [0,-1,1.5,1025,Infinity,NaN])assert.throws(()=>encodePixelPng(source,PIXEL_COLORS,size,54),/Invalid PNG size/);
 	assert.throws(()=>encodePixelPng([],PIXEL_COLORS,10,10),/Invalid pixel matrix/);
+});
+
+test("an explicit max scale keeps taller canvases from zooming the body",()=>{
+	const body=fitRgba(24,16,72,36);assert.equal(body.scale,2.25);assert.equal(body.left,9);assert.equal(body.top,0);
+	const tall=fitRgba(24,21,72,72,2.25);
+	assert.equal(tall.scale,2.25);assert.equal(tall.left,9);assert.equal(tall.top,72-21*2.25);
+	assert.equal(fitRgba(41,37,72,72,2.25).scale,72/41);
+	assert.equal(fitRgba(24,16,72,36,0).scale,2.25);
 });

@@ -1,6 +1,6 @@
 {
   "name": "pi-cc-clawd",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "An animated 8×2 Clawd with official sprite decoding and Agent-state reactions in Pi's two-line footer.",
   "author": "tarnish233",
   "type": "module",

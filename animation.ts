@@ -1,6 +1,5 @@
 import { DEFAULT_PREFERENCES, type ClawdPreferences } from "./preferences.ts";
 import {
-	FOOTER_SPRITE_NAMES,
 	officialSpriteMetadata,
 	type OfficialSpriteName,
 } from "./official-sprites.ts";
@@ -124,9 +123,9 @@ export class ClawdAnimation {
 		this.playBuiltin("blink", 160);
 	}
 
-	/** Play any footer-compatible official clip once, including while paused. */
+	/** Play any official clip once, including while paused. */
 	playOfficial(name: OfficialSpriteName): boolean {
-		if (!this.started || this.disposed || !this.preferences.enabled || !FOOTER_SPRITE_NAMES.includes(name)) return false;
+		if (!this.started || this.disposed || !this.preferences.enabled) return false;
 		this.playClipOnce(name, () => this.runActivity(), "manual");
 		return true;
 	}

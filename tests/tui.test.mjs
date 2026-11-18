@@ -72,6 +72,57 @@ for(const fullscreen of [false,true]) {
 	});
 }
 
+for(const fullscreen of [false,true]) {
+	test("real "+(fullscreen?"fullscreen":"regular")+" renderer lets a tall clip borrow the two lines above the footer",async()=>{
+		const env=await makeEditorEnvironment();setCapabilities({images:"kitty",trueColor:true,hyperlinks:true});setCellDimensions({widthPx:9,heightPx:18});
+		const terminal=new Terminal();const tui=fullscreen?new TuiAltScreen(terminal,false,undefined,{copyOnSelect:false}):new TuiMainScreen(terminal);
+		const editor=new CustomEditor(tui,env.editorTheme,env.keybindings,{embedWorkingStatus:true});editor.setText("hello");
+		const queue=[];const schedule=callback=>{queue.push(callback);return()=>{};};
+		const animation=new ClawdAnimation(()=>placement.refresh(),schedule,()=>0);
+		const statuses=new Map();let footer;
+		const footerData={getExtensionStatuses:()=>new Map(statuses),getGitBranch:()=>"main",getAvailableProviderCount:()=>1,onBranchChange:()=>()=>{}};
+		const ctx={ui:{
+			get theme(){return env.theme;},
+			setFooter(factory){footer=factory?.(tui,env.theme,footerData);},
+			setStatus(key,text){if(text===undefined)statuses.delete(key);else statuses.set(key,text);},
+			setWidget(){},
+		}};
+		const placement=new FooterPlacement(ctx,animation);placement.prepare();
+		ctx.ui.setFooter(()=>({render:()=>["model","cwd · main · "+(statuses.get(CLAWD_FOOTER_KEY)??"")],invalidate(){}}));
+		placement.mountDefault();animation.start();
+		const filler={render:()=>Array.from({length:terminal.rows-5},()=>" ".repeat(80)),invalidate(){}};
+		const children=[filler,editor,footer];
+		if(fullscreen)tui.setLayoutRoot(new VStack(children));else for(const child of children)tui.addChild(child);
+		tui.setFocus(editor);tui.start();
+		const screen=()=>fullscreen?tui.getScreenLines():tui.captureRenderState().previousLines;
+		try {
+			tui.renderNow();assert.equal(editor.render(80).length,3);assert.equal(tui.hasOverlay(),false);
+			animation.playOfficial("Thinking");tui.renderNow();assert.equal(tui.hasOverlay(),true);
+			for(let i=0;i<6;i++)queue.shift()?.();
+			tui.renderNow();
+			const rows=screen().map(stripTerminalSequences);
+			const footerRow=rows.findIndex(line=>line.includes("cwd · main"));
+			assert(footerRow>2);
+			assert.equal(footerRow,rows.length-1);
+			assert(rows[footerRow].includes("\u{10eeee}"));assert(rows[footerRow-1].includes("\u{10eeee}"));
+			assert(rows[footerRow-2].includes("\u{10eeee}"));assert(rows[footerRow-2].includes("─"));
+			assert(screen().every(line=>!line.includes("\x1b_G")));assert(terminal.output.includes("a=T,U=1"));
+			animation.setPreferences({enabled:false,motion:true});placement.refresh();tui.renderNow();
+			assert.equal(tui.hasOverlay(),false);assert(screen().every(line=>!line.includes("\u{10eeee}")));
+			// A one-row stage (Waving) must leave the editor's input line untouched.
+			animation.setPreferences({enabled:true,motion:true});placement.refresh();
+			animation.playOfficial("Waving");tui.renderNow();assert.equal(tui.hasOverlay(),true);
+			for(let i=0;i<10;i++)queue.shift()?.();
+			tui.renderNow();
+			const waving=screen().map(stripTerminalSequences);
+			const wavingFooter=waving.findIndex(line=>line.includes("cwd · main"));
+			assert(waving[wavingFooter].includes("\u{10eeee}"));assert(waving[wavingFooter-1].includes("\u{10eeee}"));
+			assert(waving[wavingFooter-2].includes("\u{10eeee}"));assert(waving[wavingFooter-2].includes("─"));
+			assert(!waving[wavingFooter-3].includes("\u{10eeee}"));
+		}finally{tui.stop();}
+	});
+}
+
 for(const protocol of [null,"kitty"])for(const fullscreen of [false,true]) {
 	test("native fallback below editor keeps input coordinates and original footer with "+(protocol??"text"),async()=>{
 		const env=await makeEditorEnvironment();setCapabilities({images:protocol,trueColor:true,hyperlinks:true});setCellDimensions({widthPx:9,heightPx:18});

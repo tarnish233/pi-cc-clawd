@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {load,makeTheme} from "./helpers.mjs";
-const {decorateFooter,removeFooterMarker,rightAlignGlyph,CLAWD_PLACEHOLDER}=await load("footer-adapter.ts");
+const {decorateFooter,removeFooterMarker,rightAlignGlyph,CLAWD_PLACEHOLDER,GLYPH_RIGHT_MARGIN}=await load("footer-adapter.ts");
 const {ClawdPortrait,CLAWD_COLUMNS}=await load("sprite.ts");
 const {setCapabilities,setCellDimensions,visibleWidth}=await load("@earendil-works/pi-tui");
 
@@ -25,7 +25,8 @@ test("one two-row image spans the right side of both existing footer lines",asyn
 	assert(lines[0].startsWith("first"));assert(lines[0].includes("\u{10eeee}"));assert.equal(lines[2],"third");assert.equal(lines.length,3);
 	assert(lines.every(line=>!line.includes("\x1b_G")));assert(!lines[1].includes(CLAWD_PLACEHOLDER));assert(lines[1].includes("\u{10eeee}"));
 	assert.match(h.transport.writes[0],/a=T,U=1/);assert.match(h.transport.writes[0],/[,]c=8[,]/);assert.match(h.transport.writes[0],/[,]r=2[,]/);
-	assert.equal(visibleWidth(lines[0].slice(0,lines[0].indexOf("\u{10eeee}"))),80-CLAWD_COLUMNS);
+	assert.equal(visibleWidth(lines[0].slice(0,lines[0].indexOf("\u{10eeee}"))),80-CLAWD_COLUMNS-GLYPH_RIGHT_MARGIN);
+	assert.equal(visibleWidth(lines[0]),80);assert(lines[0].endsWith(" "));
 	assert(lines[1].startsWith("  cwd · main"));assert(!lines[1].includes("main ·"));
 	assert.equal(visibleWidth(lines[1]),80);
 	footer.invalidate();assert.equal(base.invalidated,1);footer.dispose();assert.equal(disposed,1);
@@ -47,8 +48,8 @@ test("marker cleanup strips only adjacent separators and never merges footer wor
 
 test("narrow footer truncates existing content rather than overflowing or distorting the glyph",async()=>{
 	const h=setup();const line=rightAlignGlyph("  very long project · branch · ",h.portrait.renderGlyph()[0],28);
-	assert(line.includes("\u{10eeee}"));assert(!line.includes("\x1b_G"));assert.equal(visibleWidth(line.slice(0,line.indexOf("\u{10eeee}"))),28-CLAWD_COLUMNS);
-	assert(visibleWidth(line.slice(0,line.indexOf("\u{10eeee}")))<=28-CLAWD_COLUMNS);
+	assert(line.includes("\u{10eeee}"));assert(!line.includes("\x1b_G"));assert.equal(visibleWidth(line),28);
+	assert.equal(visibleWidth(line.slice(0,line.indexOf("\u{10eeee}"))),28-CLAWD_COLUMNS-GLYPH_RIGHT_MARGIN);
 	assert.equal(removeFooterMarker("plain"),"plain");
 	const tooSmall=rightAlignGlyph("tiny",h.portrait.renderGlyph()[0],CLAWD_COLUMNS);
 	assert.equal(tooSmall,"tiny");assert(!tooSmall.includes("\u{10eeee}"));assert(visibleWidth(tooSmall)<=CLAWD_COLUMNS);

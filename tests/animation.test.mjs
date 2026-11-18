@@ -148,10 +148,10 @@ test("a same-named manual clip cannot suppress or duplicate a real error transit
 	h.animation.dispose();
 });
 
-test("manual official clips respect the 8×2 allowlist and do not resume motion while paused", () => {
+test("manual official clips play any canvas and do not resume motion while paused", () => {
 	const h=setup();h.animation.setPreferences({enabled:true,motion:false});h.animation.start();
 	assert.equal(h.animation.playOfficial("Hula"),true);assert.deepEqual(h.animation.getState().clip,{name:"Hula",frame:0});
-	assert.equal(h.animation.playOfficial("Waving"),false);assert.equal(h.animation.getState().clip.name,"Hula");
+	assert.equal(h.animation.playOfficial("Waving"),true);assert.deepEqual(h.animation.getState().clip,{name:"Waving",frame:0});
 	h.clock.advance(4600);assert.equal(h.animation.getState().clip,undefined);assert.equal(h.clock.jobs.size,0);
 	h.animation.dispose();
 });

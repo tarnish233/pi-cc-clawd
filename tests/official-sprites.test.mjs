@@ -5,8 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { load, root } from "./helpers.mjs";
 const {
-	OFFICIAL_SPRITE_NAMES, FOOTER_SPRITE_NAMES, SKIPPED_FOOTER_SPRITE_NAMES,
-	officialSpriteMetadata, officialSpriteFrame, isOfficialSpriteName, isFooterSpriteName,
+	OFFICIAL_SPRITE_NAMES, FOOTER_SPRITE_NAMES, STAGE_SPRITE_NAMES,
+	officialSpriteMetadata, officialSpriteFrame, isOfficialSpriteName, isFooterSpriteName, isStageSpriteName,
 } = await load("official-sprites.ts");
 const { drawClawd } = await load("sprite.ts");
 
@@ -33,16 +33,18 @@ test("all 25 official clips decode every base and delta frame without malformed 
 	}
 });
 
-test("the footer enables exactly the 15 canvases no taller than 18 pixels", () => {
+test("fifteen short canvases keep the footer-only framing and ten taller ones use the stage", () => {
 	assert.equal(FOOTER_SPRITE_NAMES.length, 15);
-	assert.equal(SKIPPED_FOOTER_SPRITE_NAMES.length, 10);
-	assert.deepEqual(SKIPPED_FOOTER_SPRITE_NAMES, [
+	assert.equal(STAGE_SPRITE_NAMES.length, 10);
+	assert.deepEqual(STAGE_SPRITE_NAMES, [
 		"BreakDancing", "Confetti", "Jumping", "JumpingHappy", "Laptop",
 		"Lightbulb", "Pointing", "Spark", "Thinking", "Waving",
 	]);
 	for (const name of OFFICIAL_SPRITE_NAMES) {
 		assert.equal(isOfficialSpriteName(name.toLowerCase()), false);
 		assert.equal(isFooterSpriteName(name), officialSpriteMetadata(name).height <= 18);
+		assert.equal(isStageSpriteName(name), officialSpriteMetadata(name).height > 18);
+		assert.equal(isFooterSpriteName(name) !== isStageSpriteName(name), true);
 	}
 	assert.equal(isOfficialSpriteName("Desktop"), true);
 	assert.equal(isOfficialSpriteName("NotAClawd"), false);

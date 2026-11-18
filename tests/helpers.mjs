@@ -61,7 +61,19 @@ export async function makeEditorEnvironment(columns = 80, rows = 32, { images = 
 		terminal: { columns, rows, output: "", write(text) { this.output += text; } },
 		fullRedraws: 0,
 		renders: 0,
+		overlays: [],
 		requestRender() { this.renders++; },
+		showOverlay(component, options) {
+			const handle = {
+				component, options, hidden: false, removed: false,
+				setHidden(hidden) { this.hidden = hidden; },
+				isHidden() { return this.hidden; },
+				hide() { this.removed = true; this.hidden = true; },
+				focus() {}, unfocus() {}, isFocused() { return false; }, getBounds() { return undefined; },
+			};
+			this.overlays.push(handle);
+			return handle;
+		},
 	};
 	return { theme, tui, keybindings, editorTheme: { borderColor: text => theme.fg("border", text), selectList: getSelectListTheme(theme) } };
 }

@@ -88,11 +88,15 @@ export function officialSpriteMetadata(name: OfficialSpriteName): OfficialSprite
 	return { name, category: data.cat, width: data.w, height: data.h, fps: data.fps, frameCount: data.deltas.length + 1 };
 }
 
-/** Tall props/backgrounds are decoded but deliberately not placed in the 8×2 footer. */
+/** Canvases at or below this height keep the original footer-only framing. */
+export const FOOTER_MAX_CANVAS_ROWS = 18;
+
+/** Canvases that fit the two footer rows at the canonical body size. */
 export const FOOTER_SPRITE_NAMES: readonly OfficialSpriteName[] = OFFICIAL_SPRITE_NAMES.filter(
-	name => officialSpriteMetadata(name).height <= 18,
+	name => officialSpriteMetadata(name).height <= FOOTER_MAX_CANVAS_ROWS,
 );
-export const SKIPPED_FOOTER_SPRITE_NAMES: readonly OfficialSpriteName[] = OFFICIAL_SPRITE_NAMES.filter(
+/** Taller canvases that borrow two extra rows above the footer. */
+export const STAGE_SPRITE_NAMES: readonly OfficialSpriteName[] = OFFICIAL_SPRITE_NAMES.filter(
 	name => !FOOTER_SPRITE_NAMES.includes(name),
 );
 
@@ -102,6 +106,10 @@ export function isOfficialSpriteName(value: string): value is OfficialSpriteName
 
 export function isFooterSpriteName(value: string): value is OfficialSpriteName {
 	return (FOOTER_SPRITE_NAMES as readonly string[]).includes(value);
+}
+
+export function isStageSpriteName(value: string): value is OfficialSpriteName {
+	return (STAGE_SPRITE_NAMES as readonly string[]).includes(value);
 }
 
 function rgba(hex: string): Rgba {

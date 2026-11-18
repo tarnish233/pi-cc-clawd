@@ -1,13 +1,16 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { allocateImageId, encodeKitty, getCapabilities, getCellDimensions, Image, rgbColor, type Component } from "@earendil-works/pi-tui";
 import type { ClawdPose, ClawdState } from "./animation.ts";
-import { officialSpriteFrame } from "./official-sprites.ts";
-import { encodeRgbaPng, type Rgba } from "./png.ts";
+import { FOOTER_MAX_CANVAS_ROWS, officialSpriteFrame } from "./official-sprites.ts";
+import { encodeRgbaPng, fitRgba, type Rgba } from "./png.ts";
 
 export const SOURCE_COLUMNS = 24;
 export const SOURCE_ROWS = 16;
 export const CLAWD_COLUMNS = 8;
 export const CLAWD_ROWS = 2;
+/** Extra canvas rows borrowed from the editor's blank right margin (see ClawdOverlay). */
+export const OVERLAY_ROWS = 2;
+export const STAGE_ROWS = CLAWD_ROWS + OVERLAY_ROWS;
 export const FALLBACK_COLUMNS = 4;
 export const FALLBACK_ROWS = 1;
 export const TEXT_COLUMNS = SOURCE_COLUMNS / 2;
@@ -76,6 +79,8 @@ export interface PortraitOptions {
 	inset?: number;
 	/** Footer-only Unicode placeholders; the below-editor fallback keeps direct images. */
 	placeholders?: KittyPlaceholderTransport;
+	/** Canvas rows when placeholders span more than the footer, e.g. the editor overlay stage. */
+	stageRows?: number;
 }
 
 const KITTY_PLACEHOLDER = "\u{10eeee}";
@@ -95,10 +100,13 @@ export class ClawdPortrait implements Component {
 	private placeholderId: number | undefined;
 	private placeholderUploadedKey: string | undefined;
 	private placeholderRenderedKey: string | undefined;
+	private placeholderSizeKey: string | undefined;
+	private stageMaskCache: { key: string; rows: boolean[][] } | undefined;
 	private observedFullRedraws = 0;
 	private disposed = false;
 	private readonly columns: number;
 	private readonly rows: number;
+	private readonly stageRows: number;
 	private readonly inset: number;
 
 	constructor(
@@ -109,6 +117,7 @@ export class ClawdPortrait implements Component {
 	) {
 		this.columns = options.columns ?? CLAWD_COLUMNS;
 		this.rows = options.rows ?? CLAWD_ROWS;
+		this.stageRows = Math.max(this.rows, Math.floor(options.stageRows ?? this.rows));
 		this.inset = options.inset ?? 0;
 	}
 
@@ -172,25 +181,94 @@ export class ClawdPortrait implements Component {
 	 * cause no Kitty placement deletion, and both rows retain selection highlight.
 	 */
 	private renderPlaceholders(frame: PortraitFrame, cellWidth: number, cellHeight: number): string[] {
+		this.preparePlaceholders(frame, cellWidth, cellHeight);
+		const foreground = this.placeholderForeground();
+		const first = this.stageRows - this.rows;
+		return Array.from({ length: this.rows }, (_, index) => {
+			const row = first + index;
+			let cells = "";
+			for (let column = 0; column < this.columns; column++) {
+				cells += KITTY_PLACEHOLDER + ROW_COLUMN_DIACRITICS[row] + ROW_COLUMN_DIACRITICS[column];
+			}
+			return foreground + cells + "\x1b[39m";
+		});
+	}
+
+	/**
+	 * Lines above the footer, rendered by a non-capturing overlay over the editor's
+	 * blank right margin. Only cells with actual pixels become placeholders, so the
+	 * editor's border is redrawn by `fill` everywhere the sprite is transparent.
+	 * Returns only the lines the current frame needs, keeping its bottom edge on the
+	 * footer; the caller must anchor them to the bottom.
+	 */
+	renderStageTop(fill: (stageRow: number) => string): string[] {
+		const count = this.stageTopRows();
+		if (count <= 0) return [];
+		const cell = getCellDimensions();
+		const state = this.getState();
+		const frame = portraitFrame(state);
+		this.preparePlaceholders(frame, cell.widthPx, cell.heightPx);
+		const mask = this.stageMask(frame, cell.widthPx, cell.heightPx);
+		const first = Math.min(OVERLAY_ROWS, this.stageRows - this.rows) - count;
+		const foreground = this.placeholderForeground();
+		const lines: string[] = [];
+		for (let index = 0; index < count; index++) {
+			const row = first + index;
+			let line = "";
+			for (let column = 0; column < this.columns; column++) {
+				line += mask[row]?.[column]
+					? foreground + KITTY_PLACEHOLDER + ROW_COLUMN_DIACRITICS[row] + ROW_COLUMN_DIACRITICS[column] + "\x1b[39m"
+					: fill(row);
+			}
+			lines.push(line);
+		}
+		return lines;
+	}
+
+	/** How many stage lines above the footer this frame needs (0 means no overlay). */
+	stageTopRows(): number {
+		const state = this.getState();
+		const available = Math.min(OVERLAY_ROWS, this.stageRows - this.rows);
+		if (!state.enabled || this.disposed || !this.options.placeholders || available <= 0) return 0;
+		const cell = getCellDimensions();
+		if (![cell.widthPx, cell.heightPx].every(size => Number.isFinite(size) && size >= 1 && size <= 1024)) return 0;
+		if (getCapabilities().images !== "kitty") return 0;
+		const mask = this.stageMask(portraitFrame(state), cell.widthPx, cell.heightPx);
+		for (let row = 0; row < available; row++) if (mask[row].some(Boolean)) return available - row;
+		return 0;
+	}
+
+	/** Whether the current clip should keep an overlay mounted at all. */
+	stageActive(): boolean {
+		const state = this.getState();
+		if (!state.enabled || this.disposed || !this.options.placeholders || this.stageRows <= this.rows) return false;
+		const cell = getCellDimensions();
+		if (![cell.widthPx, cell.heightPx].every(size => Number.isFinite(size) && size >= 1 && size <= 1024)) return false;
+		if (getCapabilities().images !== "kitty") return false;
+		return portraitFrame(state).height > FOOTER_MAX_CANVAS_ROWS;
+	}
+
+	private preparePlaceholders(frame: PortraitFrame, cellWidth: number, cellHeight: number): void {
 		const transport = this.options.placeholders!;
-		const sizeKey = String(this.columns) + "/" + String(this.rows) + "/" + String(cellWidth) + "/" + String(cellHeight);
-		if (this.imageSizeKey !== sizeKey) {
-			this.images.clear();
+		const geometry = this.placeholderGeometry(frame, cellWidth, cellHeight);
+		const sizeKey = String(this.columns) + "/" + String(this.stageRows) + "/" + String(cellWidth) + "/" + String(cellHeight);
+		if (this.placeholderSizeKey !== sizeKey) {
 			this.placeholderImages.clear();
 			this.lastImagePose = undefined;
 			this.placeholderUploadedKey = undefined;
-			this.imageSizeKey = sizeKey;
+			this.placeholderSizeKey = sizeKey;
 		}
 		this.placeholderId ??= allocateImageId() % 0xffffff + 1; // 24-bit foreground colour carries the id.
 		let png = this.placeholderImages.get(frame.key);
 		if (!png) {
-			const boxWidth = this.columns * cellWidth;
-			const boxHeight = this.rows * cellHeight;
-			const limit = Math.min(1, 1024 / Math.max(boxWidth, boxHeight));
-			const widthPx = Math.max(1, Math.round(boxWidth * limit));
-			const heightPx = Math.max(1, Math.round(boxHeight * limit));
-			png = encodeRgbaPng(frame.pixels, widthPx, heightPx).toString("base64");
+			png = encodeRgbaPng(frame.pixels, geometry.widthPx, geometry.heightPx, geometry.maxScale).toString("base64");
 			this.placeholderImages.set(frame.key, png);
+			// Bound the cache: the full catalogue has over a thousand frames and
+			// only recently played ones are worth keeping.
+			if (this.placeholderImages.size > 256) {
+				const oldest = this.placeholderImages.keys().next().value;
+				if (oldest !== undefined) this.placeholderImages.delete(oldest);
+			}
 		}
 		const key = sizeKey + "/" + frame.key;
 		this.placeholderRenderedKey = key;
@@ -207,22 +285,60 @@ export class ClawdPortrait implements Component {
 			this.observedFullRedraws = current;
 			this.uploadPlaceholder(transport, key, png!, true);
 		});
+	}
 
-		const id = this.placeholderId;
-		const foreground = `\x1b[38;2;${(id >> 16) & 255};${(id >> 8) & 255};${id & 255}m`;
-		return Array.from({ length: this.rows }, (_, row) => {
-			let cells = "";
-			for (let column = 0; column < this.columns; column++) {
-				cells += KITTY_PLACEHOLDER + ROW_COLUMN_DIACRITICS[row] + ROW_COLUMN_DIACRITICS[column];
+	/** Pixel box and scale for the whole stage, shared by PNG encoding and cell masking. */
+	private placeholderGeometry(frame: PortraitFrame, cellWidth: number, cellHeight: number): { widthPx: number; heightPx: number; cellWidth: number; cellHeight: number; maxScale: number } {
+		const boxWidth = this.columns * cellWidth;
+		const boxHeight = this.stageRows * cellHeight;
+		const limit = Math.min(1, 1024 / Math.max(boxWidth, boxHeight));
+		const widthPx = Math.max(1, Math.round(boxWidth * limit));
+		const heightPx = Math.max(1, Math.round(boxHeight * limit));
+		// The original fifteen canvases keep exactly today's footer framing. Only
+		// taller clips may grow into the stage, bounded by the canonical body size.
+		const footerFit = Math.min((this.columns * cellWidth) / frame.width, (this.rows * cellHeight) / frame.height);
+		const bodyScale = Math.min((this.columns * cellWidth) / SOURCE_COLUMNS, (this.rows * cellHeight) / SOURCE_ROWS);
+		const maxScale = (frame.height <= FOOTER_MAX_CANVAS_ROWS ? footerFit : bodyScale) * limit;
+		return { widthPx, heightPx, cellWidth: widthPx / this.columns, cellHeight: heightPx / this.stageRows, maxScale };
+	}
+
+	/** Stage cell occupancy for the current frame, in stage-row order. */
+	private stageMask(frame: PortraitFrame, cellWidth: number, cellHeight: number): boolean[][] {
+		const geometry = this.placeholderGeometry(frame, cellWidth, cellHeight);
+		const key = String(geometry.widthPx) + "x" + String(geometry.heightPx) + "/" + frame.key;
+		if (this.stageMaskCache?.key === key) return this.stageMaskCache.rows;
+		const rows = Array.from({ length: this.stageRows }, () => Array<boolean>(this.columns).fill(false));
+		const { scale, left, top } = fitRgba(frame.width, frame.height, geometry.widthPx, geometry.heightPx, geometry.maxScale);
+		// The row directly above the footer holds the editor's bottom border. Only a
+		// sprite pixel actually crossing that glyph may replace the cell; otherwise a
+		// stray confetti bit would erase a whole border segment.
+		const borderRow = this.stageRows - this.rows - 1;
+		const borderLine = borderRow >= 0 ? Math.floor(borderRow * geometry.cellHeight + geometry.cellHeight / 2) : -1;
+		for (let y = 0; y < geometry.heightPx; y++) {
+			const sourceY = Math.floor((y + 0.5 - top) / scale);
+			if (sourceY < 0 || sourceY >= frame.height) continue;
+			const rowIndex = Math.min(this.stageRows - 1, Math.floor(y / geometry.cellHeight));
+			if (rowIndex === borderRow && y !== borderLine) continue;
+			const row = rows[rowIndex];
+			for (let x = 0; x < geometry.widthPx; x++) {
+				const sourceX = Math.floor((x + 0.5 - left) / scale);
+				if (sourceX < 0 || sourceX >= frame.width || frame.pixels[sourceY][sourceX] === null) continue;
+				row[Math.min(this.columns - 1, Math.floor(x / geometry.cellWidth))] = true;
 			}
-			return foreground + cells + "\x1b[39m";
-		});
+		}
+		this.stageMaskCache = { key, rows };
+		return rows;
+	}
+
+	private placeholderForeground(): string {
+		const id = this.placeholderId ?? 1;
+		return `\x1b[38;2;${(id >> 16) & 255};${(id >> 8) & 255};${id & 255}m`;
 	}
 
 	private uploadPlaceholder(transport: KittyPlaceholderTransport, key: string, png: string, force = false): void {
 		if (!force && this.placeholderUploadedKey === key) return;
 		const sequence = encodeKitty(png, {
-			columns: this.columns, rows: this.rows, imageId: this.placeholderId, moveCursor: false,
+			columns: this.columns, rows: this.stageRows, imageId: this.placeholderId, moveCursor: false,
 		}).replace("a=T", "a=T,U=1");
 		transport.write(sequence);
 		this.placeholderUploadedKey = key;
