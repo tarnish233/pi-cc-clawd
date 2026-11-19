@@ -6,10 +6,13 @@ import {
 	CLAWD_COLUMNS,
 	CLAWD_ROWS,
 	ClawdPortrait,
+	combineGlyphs,
 	FALLBACK_COLUMNS,
 	FALLBACK_ROWS,
 	MIN_COLUMNS,
 	MIN_ROWS,
+	MINI_COLUMNS,
+	MINI_ROWS,
 	OVERLAY_ROWS,
 	STAGE_ROWS,
 } from "./sprite.ts";
@@ -18,6 +21,11 @@ export const CLAWD_FOOTER_KEY = "pi-cc-clawd";
 /** Private-use marker, replaced before any compatible footer reaches the terminal. */
 export const CLAWD_PLACEHOLDER = "\ue000";
 export type FooterFactory = NonNullable<Parameters<ExtensionContext["ui"]["setFooter"]>[0]>;
+
+/** Anything that can draw the footer's placeholder block. */
+export interface GlyphSource {
+	renderGlyph(): string[];
+}
 
 /** Remove only our marker and a separator actually adjacent to it. */
 export function removeFooterMarker(line: string): string {
@@ -64,7 +72,7 @@ export function rightAlignGlyph(line: string, glyph: string, width: number): str
  */
 export function decorateFooter<T extends Component>(
 	base: T,
-	portrait: ClawdPortrait,
+	portrait: GlyphSource,
 	onIncompatible?: () => void,
 	onClick?: (clickCount: number) => void,
 ): T {
@@ -155,6 +163,51 @@ export class ClawdOverlay implements Component {
 	}
 }
 
+/**
+ * The footer face: one 8x2 Clawd, or two 4x2 companions while parallel tools run.
+ * Both minis are separate Kitty images with their own ids, so they tile cleanly.
+ */
+export class ClawdFooterFace implements GlyphSource {
+	private left: ClawdPortrait | undefined;
+	private right: ClawdPortrait | undefined;
+	private showingMinis = false;
+
+	constructor(
+		private readonly animation: ClawdAnimation,
+		private readonly single: ClawdPortrait,
+		private readonly makeMini: (slot: 0 | 1) => ClawdPortrait,
+	) {}
+
+	renderGlyph(): string[] {
+		const minis = this.animation.getState().minis?.length === 2;
+		if (minis !== this.showingMinis) {
+			// A full redraw may have discarded the other mode's uploads.
+			this.showingMinis = minis;
+			this.single.resetUpload();
+			this.left?.resetUpload();
+			this.right?.resetUpload();
+		}
+		if (!minis) return this.single.renderGlyph();
+		this.left ??= this.makeMini(0);
+		this.right ??= this.makeMini(1);
+		return combineGlyphs(this.left.renderGlyph(), this.right.renderGlyph());
+	}
+
+	resetUpload(): void {
+		this.single.resetUpload();
+		this.left?.resetUpload();
+		this.right?.resetUpload();
+	}
+
+	/** The caller owns `single`; only the minis created here are disposed. */
+	dispose(): void {
+		this.left?.dispose();
+		this.right?.dispose();
+		this.left = undefined;
+		this.right = undefined;
+	}
+}
+
 /** Optional renderer integration with a native below-editor fallback. */
 export class FooterPlacement {
 	private readonly originalSetFooter: ExtensionContext["ui"]["setFooter"];
@@ -170,6 +223,8 @@ export class FooterPlacement {
 	private mounted: "footer" | "widget" | undefined;
 	private fallbackQueued = false;
 	private disposed = false;
+	private footerFace: ClawdFooterFace | undefined;
+	private footerFacePortrait: ClawdPortrait | undefined;
 	private overlayTui: TUI | undefined;
 	private overlayComponent: ClawdOverlay | undefined;
 	private overlayHandle: { hide(): void } | undefined;
@@ -195,8 +250,9 @@ export class FooterPlacement {
 			this.originalSetFooter((tui, theme, data) => {
 				if (this.disposed) return factory(tui, theme, data);
 				const portrait = this.ensurePortrait(tui, "footer");
+				const face = this.ensureFooterFace(tui, portrait);
 				const base = factory(tui, theme, data);
-				this.view = decorateFooter(base, portrait, () => {
+				this.view = decorateFooter(base, face, () => {
 					// Hiding Clawd intentionally removes the marker; that is not an
 					// incompatible footer and must not trigger the widget fallback.
 					if (this.animation.getState().enabled) this.queueWidgetFallback();
@@ -217,7 +273,10 @@ export class FooterPlacement {
 
 	refresh(): void {
 		const enabled = this.animation.getState().enabled;
-		if (!enabled) this.portrait?.resetUpload();
+		if (!enabled) {
+			if (this.footerFace) this.footerFace.resetUpload();
+			else this.portrait?.resetUpload();
+		}
 		if (this.mounted === "footer") this.ctx.ui.setStatus(CLAWD_FOOTER_KEY, enabled ? CLAWD_PLACEHOLDER : undefined);
 		this.view?.invalidate();
 		this.startInlineOverlay();
@@ -240,6 +299,9 @@ export class FooterPlacement {
 		this.ctx.ui.setWidget(CLAWD_FOOTER_KEY, undefined);
 		this.ctx.ui.setStatus(CLAWD_FOOTER_KEY, undefined);
 		this.view = undefined;
+		this.footerFace?.dispose();
+		this.footerFace = undefined;
+		this.footerFacePortrait = undefined;
 		this.portrait?.dispose();
 		this.portrait = undefined;
 		this.portraitKind = undefined;
@@ -322,7 +384,8 @@ export class FooterPlacement {
 	 * pads) frames for an idle mascot.
 	 */
 	private syncOverlay(): void {
-		const active = this.disposed || this.mounted !== "footer" ? false : this.portrait?.stageActive() ?? false;
+		const minis = this.animation.getState().minis?.length === 2;
+		const active = this.disposed || this.mounted !== "footer" || minis ? false : this.portrait?.stageActive() ?? false;
 		if (!active) {
 			this.hideOverlay();
 			return;
@@ -426,6 +489,9 @@ export class FooterPlacement {
 		if (!this.portrait || this.portraitKind !== kind) {
 			this.hideOverlay();
 			this.overlayComponent = undefined;
+			this.footerFace?.dispose();
+			this.footerFace = undefined;
+			this.footerFacePortrait = undefined;
 			this.portrait?.dispose();
 			const placeholders = { write: (data: string) => tui.terminal.write(data), fullRedraws: () => tui.fullRedraws };
 			this.portrait = new ClawdPortrait(
@@ -441,5 +507,31 @@ export class FooterPlacement {
 		if (kind === "footer") this.overlayTui = tui;
 		if (kind === "inline") this.inlinePortrait = this.portrait;
 		return this.portrait;
+	}
+
+	private ensureFooterFace(tui: TUI, portrait: ClawdPortrait): ClawdFooterFace {
+		if (!this.footerFace || this.footerFacePortrait !== portrait) {
+			this.footerFace?.dispose();
+			this.footerFace = new ClawdFooterFace(this.animation, portrait, slot => this.makeMini(tui, slot));
+			this.footerFacePortrait = portrait;
+		}
+		return this.footerFace;
+	}
+
+	/** A half-width companion reads the matching entry of the animation's minis. */
+	private makeMini(tui: TUI, slot: 0 | 1): ClawdPortrait {
+		const placeholders = { write: (data: string) => tui.terminal.write(data), fullRedraws: () => tui.fullRedraws };
+		return new ClawdPortrait(
+			() => {
+				const state = this.animation.getState();
+				const mini = state.minis?.[slot];
+				return mini
+					? { ...state, clip: { name: mini.name, frame: mini.frame }, minis: undefined }
+					: { ...state, enabled: false, clip: undefined, minis: undefined };
+			},
+			() => this.ctx.ui.theme,
+			() => tui.terminal.rows,
+			{ columns: MINI_COLUMNS, rows: MINI_ROWS, stageRows: MINI_ROWS, borderRow: -1, placeholders },
+		);
 	}
 }

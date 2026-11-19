@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { FakeClock, load } from "./helpers.mjs";
-const { ClawdAnimation } = await load("animation.ts");
+const { ClawdAnimation, TOOL_ROTATE_MS, toolGroup, shellGroup } = await load("animation.ts");
 
 function setup(random = () => 0, options = {}) {
 	const clock = new FakeClock();
@@ -177,6 +177,138 @@ test("each tool family picks its own official clip", () => {
 		assert.deepEqual(h.animation.getState().clip, { name: clip, frame: 0 }, `${tool} must run ${clip}`);
 		h.animation.dispose();
 	}
+});
+
+test("a bash command refines the family beyond the tool name", () => {
+	const cases = [
+		["git commit -m ship", "git", "Laptop"],
+		["git push origin main", "git", "Laptop"],
+		["npm install zod", "install", "CrabWalking"],
+		["uv add httpx", "install", "CrabWalking"],
+		["cargo install ripgrep", "install", "CrabWalking"],
+		["npm run dev", "server", "Desktop"],
+		["uvicorn app:api", "server", "Desktop"],
+		["npm run build", "test", "Running"],
+		["pytest -q", "test", "Running"],
+		["tsc --noEmit", "test", "Running"],
+		["rg TODO src", "shell", "Running"],
+	];
+	for (const [command, group, clip] of cases) {
+		assert.equal(shellGroup(command), group, command);
+		const h = setup(); h.animation.start(); h.animation.agentStart();
+		h.animation.toolStart("t", "Bash", command);
+		const state = h.animation.getState();
+		assert.equal(state.clip.name, clip, command);
+		if (clip === "Desktop") assert.equal(state.clip.frame, 2, "the desk loop skips its intro");
+		h.animation.dispose();
+	}
+	assert.equal(toolGroup("Bash"), "shell", "a command is optional");
+	assert.equal(toolGroup("Read", "git status"), "read", "only shell tools read the command");
+});
+
+test("a long tool changes scene every fifteen seconds", () => {
+	const h = setup(); h.animation.start(); h.animation.agentStart();
+	h.animation.toolStart("t", "Bash", "npm run build");
+	assert.equal(h.animation.getState().clip.name, "Running");
+	h.clock.advance(TOOL_ROTATE_MS - 1000);
+	assert.equal(h.animation.getState().clip.name, "Running");
+	h.clock.advance(2000);
+	assert.equal(h.animation.getState().clip.name, "LookingAroundEyesOnly");
+	h.clock.advance(TOOL_ROTATE_MS);
+	assert.equal(h.animation.getState().clip.name, "Running");
+	h.animation.toolEnd("t", false);
+	h.clock.advance(30 * 84);
+	assert.equal(h.animation.getState().clip.name, "Desktop");
+	h.animation.dispose();
+});
+
+test("a one-clip family never rotates", () => {
+	const h = setup(); h.animation.start(); h.animation.agentStart();
+	h.animation.toolStart("t", "TodoWrite");
+	assert.equal(h.animation.getState().clip.name, "Thinking");
+	h.clock.advance(TOOL_ROTATE_MS * 2);
+	assert.equal(h.animation.getState().clip.name, "Thinking");
+	h.animation.dispose();
+});
+
+test("thanks gets a happy squint instead of the steer hop", () => {
+	const h = setup(); h.animation.start(); h.animation.agentStart();
+	h.animation.userInput("谢谢，太好用了");
+	assert.deepEqual(h.animation.getState().clip, { name: "Excited", frame: 0 });
+	h.clock.advance(23 * 84);
+	assert.equal(h.animation.getState().clip.name, "Desktop");
+	h.animation.userInput("not yet, please also fix the tests");
+	assert.equal(h.animation.getState().clip.name, "Jumping");
+	h.animation.dispose();
+});
+
+test("praise typed while idle opens the next turn with a happy squint", () => {
+	const h = setup(); h.animation.start();
+	h.animation.userInput("thanks!");
+	assert.equal(h.animation.getState().clip, undefined);
+	h.animation.agentStart();
+	assert.deepEqual(h.animation.getState().clip, { name: "Excited", frame: 0 });
+	h.clock.advance(23 * 84);
+	assert.equal(h.animation.getState().activity, "working");
+	assert.equal(h.animation.getState().clip.name, "Desktop");
+	h.animation.dispose();
+});
+
+test("streaming text turns the desk into a talking gesture", () => {
+	const h = setup(); h.animation.start(); h.animation.agentStart();
+	assert.equal(h.animation.getState().clip.name, "Desktop");
+	h.animation.speechDelta();
+	assert.equal(h.animation.getState().clip.name, "Desktop", "the desk keeps its minimum hold");
+	h.clock.advance(19 * 84);
+	assert.equal(h.animation.getState().clip.name, "Desktop");
+	h.clock.advance(84);
+	assert.equal(h.animation.getState().clip.name, "Pointing");
+	assert.equal(h.animation.getState().activity, "working");
+	h.animation.speechEnd();
+	h.clock.advance(20 * 84);
+	assert.equal(h.animation.getState().clip.name, "Desktop");
+	h.animation.dispose();
+});
+
+test("thinking deltas and tool time never start the talking loop", () => {
+	const h = setup(); h.animation.start();
+	h.animation.speechDelta(); // idle
+	assert.equal(h.animation.getState().clip, undefined);
+	h.animation.agentStart();
+	h.animation.toolStart("t", "Read");
+	h.animation.speechDelta(); // a tool is running
+	assert.equal(h.animation.getState().clip.name, "LookingAround");
+	h.animation.toolEnd("t", false);
+	h.clock.advance(30 * 84);
+	assert.equal(h.animation.getState().clip.name, "Desktop");
+	h.animation.dispose();
+});
+
+test("parallel tools become two mini Clawds with independent frames", () => {
+	const h = setup(); h.animation.start(); h.animation.agentStart();
+	h.animation.toolStart("a", "Read");
+	assert.equal(h.animation.getState().minis, undefined, "one tool keeps the full glyph");
+	h.animation.toolStart("b", "Bash", "git push");
+	const minis = h.animation.getState().minis;
+	assert.equal(minis.length, 2);
+	assert.deepEqual(minis.map(mini => mini.name), ["LookingAround", "Laptop"]);
+	assert.deepEqual(minis.map(mini => mini.frame), [0, 5], "the slot offset desynchronises the pair");
+	h.clock.advance(375);
+	assert.deepEqual(h.animation.getState().minis.map(mini => mini.frame), [3, 8]);
+	h.animation.toolEnd("a", false);
+	assert.equal(h.animation.getState().minis, undefined);
+	assert.equal(h.animation.getState().activity, "tools");
+	h.animation.dispose();
+});
+
+test("a paused mascot shows one still Clawd instead of ticking minis", () => {
+	const h = setup(); h.animation.start(); h.animation.agentStart();
+	h.animation.toolStart("a", "Read"); h.animation.toolStart("b", "Bash");
+	assert.equal(h.animation.getState().minis.length, 2);
+	h.animation.setPreferences({ enabled: true, motion: false });
+	assert.equal(h.animation.getState().minis, undefined);
+	assert.equal(h.clock.jobs.size, 0);
+	h.animation.dispose();
 });
 
 test("a tool clip is held before the next tool family replaces it", () => {

@@ -8,6 +8,9 @@ export const SOURCE_COLUMNS = 24;
 export const SOURCE_ROWS = 16;
 export const CLAWD_COLUMNS = 8;
 export const CLAWD_ROWS = 2;
+/** Two tools at once split the glyph into two half-width companions. */
+export const MINI_COLUMNS = CLAWD_COLUMNS / 2;
+export const MINI_ROWS = CLAWD_ROWS;
 /** Extra canvas rows borrowed from the editor's blank right margin (see ClawdOverlay). */
 export const OVERLAY_ROWS = 2;
 export const STAGE_ROWS = CLAWD_ROWS + OVERLAY_ROWS;
@@ -100,6 +103,12 @@ export const FOOTER_PLACEHOLDER_MARKS: readonly string[] = [
 /** True when a screen line holds footer placeholder cells (not stage rows 0/1). */
 export function hasFooterPlaceholder(line: string): boolean {
 	return FOOTER_PLACEHOLDER_MARKS.some(mark => line.includes(KITTY_PLACEHOLDER + mark));
+}
+
+/** Place two half-width mini glyphs side by side inside the usual footer block. */
+export function combineGlyphs(left: readonly string[], right: readonly string[]): string[] {
+	if (left.length !== MINI_ROWS || right.length !== MINI_ROWS) return [];
+	return left.map((line, index) => line + right[index]);
 }
 
 /** The same source pixels, rendered either as a small PNG or lossless half-blocks. */

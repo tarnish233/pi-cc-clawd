@@ -18,10 +18,17 @@ export interface ClawdClip {
 	name: OfficialSpriteName;
 	frame: number;
 }
+/** A half-size Clawd for a parallel tool: one of the two minis in the footer. */
+export interface ClawdMini {
+	name: OfficialSpriteName;
+	frame: number;
+}
 export interface ClawdState extends ClawdPreferences {
 	pose: ClawdPose;
 	activity: ClawdActivity;
 	clip?: ClawdClip;
+	/** Present while two or more tools run at once; the footer splits into two minis. */
+	minis?: ClawdMini[];
 }
 
 /** Scheduling returns cancellation, making lifecycle tests independent of real time. */
@@ -41,7 +48,9 @@ export interface ClawdAnimationOptions {
 }
 
 /** What a tool call looks like while it runs. */
-export type ClawdToolGroup = "read" | "edit" | "shell" | "search" | "agent" | "ask" | "todo" | "magic" | "other";
+export type ClawdToolGroup =
+	| "read" | "edit" | "shell" | "git" | "install" | "server" | "test"
+	| "search" | "agent" | "ask" | "todo" | "magic" | "other";
 
 /**
  * Tool calls borrow the official clips that already carry the right prop:
@@ -53,6 +62,10 @@ export const TOOL_CLIPS: Readonly<Record<ClawdToolGroup, OfficialSpriteName>> = 
 	read: "LookingAround",
 	edit: "Laptop",
 	shell: "Running",
+	git: "Laptop",
+	install: "CrabWalking",
+	server: "Desktop",
+	test: "Running",
 	search: "LookingAroundEyesOnly",
 	agent: "Waving",
 	ask: "Pointing",
@@ -71,10 +84,28 @@ const TOOL_GROUPS: ReadonlyMap<string, ClawdToolGroup> = new Map([
 	["todo_write", "todo"], ["todowrite", "todo"],
 ]);
 
-export function toolGroup(name: string): ClawdToolGroup {
+export function toolGroup(name: string, command?: string): ClawdToolGroup {
 	const key = name.toLowerCase();
 	if (key.startsWith("mcp__")) return "magic";
-	return TOOL_GROUPS.get(key) ?? "other";
+	const group = TOOL_GROUPS.get(key) ?? "other";
+	// A shell command says more than the tool name: tests, git and package
+	// installs get their own clips while everything else keeps Running.
+	if (group !== "shell" || !command) return group;
+	return shellGroup(command);
+}
+
+const GIT_COMMAND = /\bgit\s+(?:commit|push|pull|fetch|merge|rebase|cherry-pick|tag|stash|reset|revert|switch|checkout|clone|am|apply)\b/i;
+const INSTALL_COMMAND = /(?:\b(?:npm|pnpm|yarn|bun)\s+(?:i|install|add|remove|rm|uninstall|up|update)\b)|(?:\b(?:pip3?|uv|poetry|conda)\s+(?:install|add|sync|remove|uninstall|update)\b)|(?:\b(?:cargo|go|brew|apt|apt-get|dnf|pacman|winget|choco|gem|composer)\s+(?:install|add|get|upgrade|update)\b)/i;
+const SERVER_COMMAND = /(?:\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve)\b)|(?:\b(?:vite|next\s+dev|nuxt\s+dev|nodemon|uvicorn|gunicorn|flask\s+run|python3?\s+-m\s+http\.server|docker\s+compose\s+up)\b)/i;
+const TEST_COMMAND = /(?:\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|lint|typecheck|check|fmt|format)\b)|(?:\b(?:pytest|jest|vitest|mocha|tsc|make|cargo\s+(?:test|build|check|clippy)|go\s+(?:test|build|vet)|swift\s+(?:test|build)|xcodebuild|gradle|mvn)\b)/i;
+
+/** Classify a shell command line; exported so the mapping stays testable. */
+export function shellGroup(command: string): ClawdToolGroup {
+	if (GIT_COMMAND.test(command)) return "git";
+	if (INSTALL_COMMAND.test(command)) return "install";
+	if (SERVER_COMMAND.test(command)) return "server";
+	if (TEST_COMMAND.test(command)) return "test";
+	return "shell";
 }
 
 interface LoopSpec {
@@ -121,6 +152,34 @@ const STAGE_IDLE_CLIPS: readonly [OfficialSpriteName, number][] = [
 const IDLE_CLIP_WEIGHT = [...FOOTER_IDLE_CLIPS, ...STAGE_IDLE_CLIPS].reduce((total, [, weight]) => total + weight, 0);
 
 /**
+ * A long tool changes its scene now and then (clawd-actor's 15 s stage timer):
+ * a three-minute build should not loop the same two seconds the whole time.
+ * Families stay within a similar canvas height so the layout does not jump.
+ */
+export const TOOL_ROTATE_MS = 15_000;
+export const TOOL_ROTATION: Readonly<Record<ClawdToolGroup, readonly OfficialSpriteName[]>> = {
+	read: ["LookingAround", "LookingAroundEyesOnly", "Turning"],
+	edit: ["Laptop", "Desktop"],
+	shell: ["Running", "CrabWalking"],
+	git: ["Laptop", "Desktop"],
+	install: ["CrabWalking", "Running"],
+	server: ["Desktop", "Laptop"],
+	test: ["Running", "LookingAroundEyesOnly"],
+	search: ["LookingAroundEyesOnly", "LookingAround"],
+	agent: ["Waving", "Pointing"],
+	ask: ["Pointing"],
+	todo: ["Thinking"],
+	magic: ["Spark", "Pointing"],
+	other: ["CrabWalking", "Running"],
+};
+
+/** Parallel tools get half-size companions, stepped at a calmer 8 fps. */
+const MINI_FPS = 8;
+/** A praised prompt may be followed by the turn a moment later. */
+const PRAISE_TTL_MS = 15_000;
+const PRAISE_PATTERN = /(?:谢谢|多谢|感谢|辛苦|干得漂亮|干得好|太棒了|厉害|\b(?:thanks|thank\s*you|thx|ty|good\s+job|great\s+job|nice\s+work|well\s+done|awesome|love\s+it)\b)/i;
+
+/**
  * Blinking is an ambient tic, not one of the idle acts: it runs on its own
  * 4-7 s clock and never competes with a clip for the same slot.
  */
@@ -162,7 +221,7 @@ export class ClawdAnimation {
 	private pending: { dueFrame: number; run: () => void } | undefined;
 	private agentActive = false;
 	private failed = false;
-	private readonly tools = new Map<string, ClawdToolGroup>();
+	private readonly tools = new Map<string, { group: ClawdToolGroup; startedAt: number }>();
 	private turnTools = 0;
 	private turnStartedAt = 0;
 	private idleSince = 0;
@@ -172,6 +231,12 @@ export class ClawdAnimation {
 	private successes = 0;
 	private context = 0;
 	private crowdedShown = false;
+	private speaking = false;
+	private praisePending = false;
+	private praiseAt = 0;
+	private rotationGroup: ClawdToolGroup | undefined;
+	private rotationIndex = 0;
+	private rotateAt = 0;
 	private readonly now: () => number;
 	private readonly contextPercent: (() => number | null) | undefined;
 	private started = false;
@@ -190,13 +255,29 @@ export class ClawdAnimation {
 	}
 
 	getState(): ClawdState {
+		const minis = this.miniClips();
 		return {
 			...this.preferences,
 			enabled: this.preferences.enabled && !this.disposed,
 			pose: this.pose,
 			activity: this.activity,
 			...(this.clip ? { clip: { ...this.clip } } : {}),
+			...(minis.length ? { minis } : {}),
 		};
+	}
+
+	/** Two parallel tools become two half-size Clawds, stepped from the wall clock. */
+	private miniClips(): ClawdMini[] {
+		if (!this.started || this.disposed || !this.preferences.enabled || !this.preferences.motion || this.activity !== "tools" || this.tools.size < 2) return [];
+		const now = this.now();
+		const frameMs = 1000 / MINI_FPS;
+		return [...this.tools.values()].slice(0, 2).map((tool, slot) => {
+			const name = TOOL_CLIPS[tool.group];
+			const { frameCount } = officialSpriteMetadata(name);
+			// The slot offset desynchronises two tools of the same family.
+			const step = Math.max(0, Math.floor((now - tool.startedAt) / frameMs) + slot * 5);
+			return { name, frame: step % frameCount };
+		});
 	}
 
 	start(): void {
@@ -231,9 +312,18 @@ export class ClawdAnimation {
 		this.agentActive = true;
 		this.failed = false;
 		this.tools.clear();
+		this.resetRotation();
 		this.turnTools = 0;
 		this.turnStartedAt = this.now();
+		this.speaking = false;
 		this.activity = "working";
+		const praised = this.praisePending && this.now() - this.praiseAt <= PRAISE_TTL_MS;
+		this.praisePending = false;
+		if (praised && this.ready) {
+			// A praised prompt opens with a happy squint before the desk loop.
+			this.playOnce("Excited", () => this.enterActivity(true));
+			return;
+		}
 		this.enterActivity(true);
 	}
 
@@ -242,6 +332,8 @@ export class ClawdAnimation {
 		const failed = this.failed;
 		this.failed = false;
 		this.agentActive = false;
+		this.speaking = false;
+		this.praisePending = false;
 		this.tools.clear();
 		// The error one-shot is already playing; do not restart it or turn it into a success.
 		if (failed && this.activity === "error" && this.clip?.name === "Facepalm" && this.clipOwner === "activity") return;
@@ -250,10 +342,13 @@ export class ClawdAnimation {
 		this.enterActivity(true);
 	}
 
-	/** The tool name selects the clip; the id keeps parallel tools distinguishable. */
-	toolStart(id: string, name = ""): void {
+	/** The tool name selects the clip; a shell command refines the family; the id keeps parallel tools apart. */
+	toolStart(id: string, name = "", command?: string): void {
 		this.wake();
-		this.tools.set(id, toolGroup(name));
+		if (this.tools.size === 0) this.resetRotation();
+		// Text stops talking as soon as the model reaches for a tool.
+		this.speaking = false;
+		this.tools.set(id, { group: toolGroup(name, command), startedAt: this.now() });
 		this.turnTools += 1;
 		this.activity = "tools";
 		this.showTools(false);
@@ -282,6 +377,7 @@ export class ClawdAnimation {
 
 	compactStart(): void {
 		this.wake();
+		this.speaking = false;
 		this.activity = "compacting";
 		this.enterActivity(true);
 	}
@@ -300,18 +396,45 @@ export class ClawdAnimation {
 
 	turnError(): void {
 		this.wake();
+		this.speaking = false;
 		this.failed = true;
 		this.activity = "error";
 		this.enterActivity(true);
 	}
 
-	/** A steer or follow-up prompt during a turn gets a hop; the idle prompt's hop would be lost. */
+	/** A steer or follow-up prompt during a turn gets a hop; thanks gets a happy squint. */
 	userInput(text: string): void {
 		if (!this.started || this.disposed || !this.preferences.enabled || !this.preferences.motion) return;
-		if (text.trim().length === 0 || text.trimStart().startsWith("/")) return;
-		if (!this.agentActive) return;
+		const trimmed = text.trim();
+		if (trimmed.length === 0 || trimmed.startsWith("/")) return;
+		const praise = PRAISE_PATTERN.test(trimmed);
+		if (!this.agentActive) {
+			// The turn starts right after this event: remember the praise for agentStart.
+			this.praisePending = praise;
+			this.praiseAt = this.now();
+			return;
+		}
 		this.wake();
-		this.playOnce("Jumping", () => this.enterActivity(true));
+		this.praisePending = false;
+		this.playOnce(praise ? "Excited" : "Jumping", () => this.enterActivity(true));
+	}
+
+	/** Assistant text is streaming: Clawd turns from the desk and talks instead of typing. */
+	speechDelta(): void {
+		if (!this.agentActive || this.tools.size > 0 || this.activity !== "working") return;
+		if (!this.started || this.disposed || !this.preferences.enabled || !this.preferences.motion) return;
+		if (this.speaking) return;
+		this.speaking = true;
+		// Keep a manual one-shot or the praise clip; the talking loop follows it.
+		if (!this.clipOnce && (!this.clip || this.clipOwner === "activity")) this.switchTo(loopOf("Pointing"), false);
+	}
+
+	/** The answer stopped streaming: back to the desk (or the tired sway). */
+	speechEnd(): void {
+		if (!this.speaking) return;
+		this.speaking = false;
+		if (this.activity !== "working" || !this.ready) return;
+		if (!this.clipOnce && (!this.clip || this.clipOwner === "activity")) this.switchTo(this.workingSpec(), false);
 	}
 
 	/** A one-shot blink also works while autonomous motion is paused. */
@@ -472,6 +595,8 @@ export class ClawdAnimation {
 	}
 
 	private workingSpec(): LoopSpec {
+		// While text streams, Clawd faces the reader and gestures instead of typing.
+		if (this.speaking) return loopOf("Pointing");
 		return this.tired() ? loopOf("Swaying") : DESKTOP;
 	}
 
@@ -480,8 +605,33 @@ export class ClawdAnimation {
 	}
 
 	private toolsSpec(): LoopSpec {
-		const group = [...this.tools.values()].at(-1) ?? "other";
-		return loopOf(TOOL_CLIPS[group]);
+		const group = [...this.tools.values()].at(-1)?.group ?? "other";
+		if (this.rotationGroup !== group) {
+			this.rotationGroup = group;
+			this.rotationIndex = 0;
+			this.rotateAt = this.now() + TOOL_ROTATE_MS;
+		}
+		const names = TOOL_ROTATION[group];
+		const name = names[this.rotationIndex % names.length]!;
+		return name === "Desktop" ? DESKTOP : loopOf(name);
+	}
+
+	/** Advance a long tool to the next scene in its family, once per rotation window. */
+	private advanceRotation(): boolean {
+		if (this.activity !== "tools" || this.now() < this.rotateAt) return false;
+		const group = [...this.tools.values()].at(-1)?.group;
+		if (!group || group !== this.rotationGroup) return false;
+		if (TOOL_ROTATION[group].length < 2) return false;
+		this.rotationIndex += 1;
+		this.rotateAt = this.now() + TOOL_ROTATE_MS;
+		this.startLoop(this.toolsSpec());
+		return true;
+	}
+
+	private resetRotation(): void {
+		this.rotationGroup = undefined;
+		this.rotationIndex = 0;
+		this.rotateAt = 0;
 	}
 
 	/**
@@ -503,7 +653,7 @@ export class ClawdAnimation {
 		}
 		// Entering work is immediate; the hold only protects tool-to-tool switches.
 		const holdingWorking = this.clip?.name === DESKTOP.name || this.clip?.name === "Swaying";
-		if (immediate || !this.clip || holdingWorking || this.clipOwner !== "activity" || this.clipFrames >= HOLD_FRAMES) {
+		if (immediate || !this.clip || this.clipOnce || holdingWorking || this.clipOwner !== "activity" || this.clipFrames >= HOLD_FRAMES) {
 			this.startLoop(spec);
 			return;
 		}
@@ -555,6 +705,7 @@ export class ClawdAnimation {
 			this.changed();
 			this.after(frameMs, () => {
 				if (this.applyPending()) return;
+				if (this.advanceRotation()) return;
 				if (this.checkTired()) return;
 				show(frame >= spec.loopTo ? spec.loopFrom : frame + 1);
 			});

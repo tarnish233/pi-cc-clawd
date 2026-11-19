@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0 - 2026-11-19
+
+- Read the bash command line, not just the tool name: tests and builds keep `Running`, `git commit/push/...` uses `Laptop`, package installs use `CrabWalking`, and a long-running dev server uses the `Desktop` scene.
+- Change scene every 15 s while one tool keeps running (`Running` ↔ `CrabWalking`, `Laptop` ↔ `Desktop`, `Waving` ↔ `Pointing`, ...), so a three-minute build no longer loops the same two seconds.
+- Answer praise in the prompt (`谢谢`, `thanks`, `干得漂亮`, ...) with `Excited`: immediately during a turn, and at the start of the next turn when typed while idle.
+- Turn into a talking gesture while assistant text streams (`Pointing` from the first `text_delta`), then return to the desk on `message_end` or when a tool starts.
+- Split the footer into two 4×2 mini Clawds while two or more tools run, each with its own Kitty image id and 8 fps wall-clock frames; the stage stays off in that mode and the full glyph returns when one tool is left.
+- Cover the new triggers with animation, footer and extension tests (125 tests total).
+
 ## 0.7.0 - 2026-11-19
 
 - Give every idle clip a guaranteed slot: idle acts now draw from a shuffled weighted bag, so `JumpingHappy` and `BreakDancing` (previously manual-only) appear automatically, along with all thirteen existing idle acts.

@@ -223,3 +223,49 @@ test("real fullscreen renderer pets Clawd on a footer click", async () => {
 		tui.stop(); animation.dispose(); placement.dispose();
 	}
 });
+
+for (const fullscreen of [false, true]) {
+	test("real " + (fullscreen ? "fullscreen" : "regular") + " renderer splits the footer while two tools run", async () => {
+		const env = await makeEditorEnvironment(); setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true }); setCellDimensions({ widthPx: 9, heightPx: 18 });
+		const terminal = new Terminal(); const tui = fullscreen ? new TuiAltScreen(terminal, false, undefined, { copyOnSelect: false }) : new TuiMainScreen(terminal);
+		const editor = new CustomEditor(tui, env.editorTheme, env.keybindings, { embedWorkingStatus: true }); editor.setText("hello");
+		let placement;
+		const animation = new ClawdAnimation(() => placement.refresh(), () => () => {}, () => 0);
+		const statuses = new Map(); let footer;
+		const footerData = { getExtensionStatuses: () => new Map(statuses), getGitBranch: () => "main", getAvailableProviderCount: () => 1, onBranchChange: () => () => {} };
+		const ctx = { ui: {
+			get theme() { return env.theme; },
+			getEditorText: () => editor.getText(),
+			setFooter(factory) { footer = factory?.(tui, env.theme, footerData); },
+			setStatus(key, text) { if (text === undefined) statuses.delete(key); else statuses.set(key, text); },
+			setWidget() {},
+		} };
+		placement = new FooterPlacement(ctx, animation); placement.prepare();
+		ctx.ui.setFooter(() => ({ render: () => ["model", "cwd · main · " + (statuses.get(CLAWD_FOOTER_KEY) ?? "")], invalidate() {} }));
+		placement.mountDefault(); animation.start();
+		const children = [editor, footer];
+		if (fullscreen) tui.setLayoutRoot(new VStack(children)); else for (const child of children) tui.addChild(child);
+		tui.setFocus(editor); tui.start();
+		try {
+			tui.renderNow();
+			animation.agentStart();
+			animation.toolStart("a", "Read");
+			animation.toolStart("b", "Bash");
+			terminal.output = "";
+			tui.renderNow();
+			const uploads = [...terminal.output.matchAll(/,c=4,r=2,i=(\d+)/g)];
+			assert(uploads.length >= 2, "both minis upload a half-width image");
+			assert.notEqual(uploads[0][1], uploads[1][1], "the minis use distinct image ids");
+			const lines = footer.render(80);
+			assert.equal(lines.length, 2);
+			assert(lines.every(line => line.split("\u{10eeee}").length - 1 === 8));
+			assert.equal(tui.hasOverlay(), false, "a mini pair never mounts the stage");
+			animation.toolEnd("a", false);
+			terminal.output = "";
+			tui.renderNow();
+			assert.match(terminal.output, /,c=8,r=4,/, "the full glyph returns with one tool left");
+		} finally {
+			tui.stop(); animation.dispose(); placement.dispose();
+		}
+	});
+}

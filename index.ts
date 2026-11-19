@@ -9,6 +9,17 @@ export interface ClawdExtensionOptions {
 	random?: () => number;
 }
 
+/** The bash command line, when the host passes one (the name alone cannot tell git from a build). */
+function commandOf(args: unknown): string | undefined {
+	if (!args || typeof args !== "object") return undefined;
+	const record = args as Record<string, unknown>;
+	for (const key of ["command", "cmd"]) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) return value;
+	}
+	return undefined;
+}
+
 /** Export the factory for lifecycle tests without a terminal or a model request. */
 export function createClawdExtension(options: ClawdExtensionOptions = {}) {
 	return function clawdExtension(pi: ExtensionAPI): void {
@@ -64,8 +75,14 @@ export function createClawdExtension(options: ClawdExtensionOptions = {}) {
 			animation?.refreshContext();
 			animation?.agentSettled(event.aborted);
 		});
-		pi.on("tool_execution_start", event => animation?.toolStart(event.toolCallId, event.toolName));
+		pi.on("tool_execution_start", event => animation?.toolStart(event.toolCallId, event.toolName, commandOf(event.args)));
 		pi.on("tool_execution_end", event => animation?.toolEnd(event.toolCallId, event.isError));
+		pi.on("message_update", event => {
+			if (event.assistantMessageEvent?.type === "text_delta") animation?.speechDelta();
+		});
+		pi.on("message_end", event => {
+			if (event.message.role === "assistant") animation?.speechEnd();
+		});
 		pi.on("input", event => animation?.userInput(event.text));
 		pi.on("turn_end", event => {
 			animation?.refreshContext();

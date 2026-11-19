@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {load,makeTheme} from "./helpers.mjs";
-const {decorateFooter,removeFooterMarker,rightAlignGlyph,CLAWD_PLACEHOLDER,GLYPH_RIGHT_MARGIN}=await load("footer-adapter.ts");
-const {ClawdPortrait,CLAWD_COLUMNS}=await load("sprite.ts");
+const {decorateFooter,removeFooterMarker,rightAlignGlyph,CLAWD_PLACEHOLDER,GLYPH_RIGHT_MARGIN,ClawdFooterFace}=await load("footer-adapter.ts");
+const {ClawdPortrait,CLAWD_COLUMNS,combineGlyphs,MINI_COLUMNS,MINI_ROWS,STAGE_ROWS}=await load("sprite.ts");
 const {setCapabilities,setCellDimensions,visibleWidth}=await load("@earendil-works/pi-tui");
 
 function setup(images="kitty") {
@@ -91,6 +91,47 @@ test("clicking the footer glyph pets Clawd; other footer cells keep their behavi
 	assert.equal(footer.handleMouse(at(10,0)),undefined); // base has no mouse handler
 	h.state.enabled=false;assert.equal(footer.handleMouse(at(72,1)),undefined);
 	assert.deepEqual(clicks,[1,4]);
+});
+
+test("two parallel tools tile two half-width minis with their own image ids",async()=>{
+	setCapabilities({images:"kitty",trueColor:true,hyperlinks:true});setCellDimensions({widthPx:9,heightPx:18});
+	const theme=await makeTheme();
+	const state={enabled:true,motion:true,pose:"standing",activity:"tools",minis:[{name:"LookingAround",frame:0},{name:"Running",frame:4}]};
+	const writes=[];const transport={write:data=>writes.push(data),fullRedraws:()=>0};
+	const single=new ClawdPortrait(()=>state,()=>theme,()=>32,{placeholders:transport,stageRows:STAGE_ROWS});
+	const makeMini=slot=>new ClawdPortrait(
+		()=>({...state,clip:state.minis[slot]}),
+		()=>theme,()=>32,
+		{columns:MINI_COLUMNS,rows:MINI_ROWS,stageRows:MINI_ROWS,borderRow:-1,placeholders:transport},
+	);
+	const face=new ClawdFooterFace({getState:()=>state},single,makeMini);
+	const glyph=face.renderGlyph();
+	assert.equal(glyph.length,2);
+	assert.equal(visibleWidth(glyph[0]),CLAWD_COLUMNS);
+	assert.equal(visibleWidth(glyph[1]),CLAWD_COLUMNS);
+	assert(glyph[0].includes("\u{10eeee}\u0305\u0305"),"minis use their own first row");
+	assert(glyph[1].includes("\u{10eeee}\u030d\u0305"),"minis use their own second row");
+	assert.equal(writes.length,2,"each mini uploads one image");
+	assert(writes.every(write=>/,c=4,/.test(write)&&/,r=2,/.test(write)));
+	const ids=writes.map(write=>/i=(\d+)/.exec(write)?.[1]);
+	assert(ids[0]&&ids[1]&&ids[0]!==ids[1],"the two minis need distinct image ids");
+
+	state.minis=undefined;
+	const singleGlyph=face.renderGlyph();
+	assert.equal(visibleWidth(singleGlyph[0]),CLAWD_COLUMNS);
+	assert.match(writes.at(-1),/,c=8,/, "the full glyph returns at full size");
+	assert.equal(single.stageActive(),false);
+
+	state.minis=[{name:"LookingAround",frame:0},{name:"Running",frame:4}];
+	face.renderGlyph();
+	assert.match(writes.at(-1),/,c=4,/, "coming back re-uploads both minis");
+	assert.match(writes.at(-2),/,c=4,/);
+	face.dispose();
+});
+
+test("combining minis rejects a mismatched pair",async()=>{
+	assert.deepEqual(combineGlyphs(["a"],["b","c"]),[]);
+	assert.deepEqual(combineGlyphs(["a","b"],["c","d"]),["ac","bd"]);
 });
 
 test("clicking the stage overlay pets Clawd",async()=>{

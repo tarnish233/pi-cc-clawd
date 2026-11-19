@@ -15,6 +15,7 @@ Pi footer 右侧的 Clawd：跟着 Agent 状态做小动作的官方像素动画
 
 - 固定的 **24×16 官方轮廓**，按真实字符单元像素等比缩放，不重画头身比例。
 - footer 右侧 8 列 × 2 行，透明 PNG；Unicode 占位符让两行 footer 文字都能正常选择、复制。
+- 两个以上工具并行时，同一块 8×2 区域拆成 **两只 4×2 小 Clawd**（各自独立的 Kitty 图片和 id），工具回落到一个后恢复整只；此模式不借舞台。
 - 图标右侧固定留 **1 列空白**：部分终端会丢失行尾单元格的组合字符，贴边时右钳会被裁掉。
 - 画布高于 footer 的动画临时使用 **8 列 × 2 行非捕获 overlay**，叠在编辑器底边框 + 输入行的右侧空白上，与 footer 组成 **8×4 舞台**；overlay 按 footer 的真实屏幕行定位（内容不足一屏时也不会掉到 footer 下面），主体保持 2.25 倍标准体型，不放大也不压扁。overlay 只在播放期间存在，其余时间完全移除。
 - 没有捕获到兼容的两行 footer 时：Kitty 终端把同样的 **8×2 图标居中叠在原生 footer 的两行上**（非捕获 overlay），不额外占行，也不碰输入框；终端宽度小于 110 列时隐藏（原生 footer 的模型名会占到这里）。
@@ -23,24 +24,26 @@ Pi footer 右侧的 Clawd：跟着 Agent 状态做小动作的官方像素动画
 
 ## 动画与行为
 
-官方 **6.6395.0** 的 base＋delta 目录，**25 组**全部可按需解码和播放。行为按社区常见的六类组织：
+官方 **6.6395.0** 的 base＋delta 目录，**25 组**全部可按需解码和播放。行为按触发来源组织：
 
 | 类别 | 触发 | 动作 |
 | --- | --- | --- |
-| 工具映射 | `tool_execution_start` 的 `toolName` | `read`/`grep`/`find`/`ls` → `LookingAround`；`edit`/`write` → `Laptop`；`bash` → `Running`；`web_search`/`fetch_content` → `LookingAroundEyesOnly`；`agent`/`task` → `Waving`；`ask_user_question` → `Pointing`；`todo_write` → `Thinking`；MCP 工具 → `Spark`；其它 → `CrabWalking` |
-| 回合节点 | `agent_start`、流式输入、`turn_end`、`agent_settled` | 生成中 `Desktop`；steer／follow-up 提示 `Jumping`；快速（≤15 秒）空回合结束 `JumpingHappy`，普通结束 `DancingHappy`，每第 10 次成功 `BreakDancing`，单回合 ≥12 次工具 `Confetti`；中断 `Disappointed`；失败 `Facepalm`；compact `Meditating` |
+| 工具映射 | `tool_execution_start` 的 `toolName`（`Bash` 还看命令） | `read`/`grep`/`find`/`ls` → `LookingAround`；`edit`/`write` → `Laptop`；`bash` → `Running`，其中测试／构建仍是 `Running`、`git commit/push/…` → `Laptop`、装包 → `CrabWalking`、`npm run dev`／`uvicorn` 等长跑服务 → `Desktop`；`web_search`/`fetch_content` → `LookingAroundEyesOnly`；`agent`/`task` → `Waving`；`ask_user_question` → `Pointing`；`todo_write` → `Thinking`；MCP 工具 → `Spark`；其它 → `CrabWalking` |
+| 回合节点 | `agent_start`、`message_update` 的 `text_delta`、`turn_end`、`agent_settled` | 生成中 `Desktop`；**回答流式输出时改为 `Pointing` 比划讲解**，`message_end` 后回 `Desktop`；steer／follow-up 提示 `Jumping`；快速（≤15 秒）空回合结束 `JumpingHappy`，普通结束 `DancingHappy`，每第 10 次成功 `BreakDancing`，单回合 ≥12 次工具 `Confetti`；中断 `Disappointed`；失败 `Facepalm`；compact `Meditating` |
+| 长任务 | 同一个工具连续运行 15 秒 | 在同族里换一场戏（如 `Running` ↔ `CrabWalking`、`Laptop` ↔ `Desktop`、`Waving` ↔ `Pointing`），避免长构建／长服务一直重复同 2 秒；只有单一 clip 的族不换 |
+| 并行工具 | 同时运行的 `tool_execution_start` ≥2 | footer 的 8×2 拆成**两只 4×2 小 Clawd**，各用自己的 Kitty image id、按 8 fps 从墙钟取帧；此时不借舞台。剩一个工具后恢复整只 |
 | 空闲小动作 | 眨眼独立每 4–7 秒一次；小动作每 6–10 秒一次（上下文紧张时 4–6 秒） | 眨眼不再占用小动作名额，避免一套动作里近一半都是眨眼；小动作池为左右看 + 8 组短动画（张望、扫视、转身、摇摆、走动、兴奋、呼啦、眩晕）与 7 组高画布（跳跃、挥手、灯泡、火花、彩带、跳跃开心、街舞）；用洗牌袋抽取，保证每一组在一轮内都会出现 |
 | 系统状态 | 上下文百分比、回合时长、时段 | ≥85% 触发一次 `Dizzy`；同一回合生成 ≥2 分钟改用 `Swaying`；空闲 10 分钟（夜间 3 分钟）进入 `Meditating` 慢速睡眠，任意事件唤醒 |
-| 交互 | 鼠标点击 footer 上的 Clawd（fullscreen）、`/clawd pet`、`Ctrl+Alt+C` | 单击随机 `Excited`／`Hula`／`Waving`／`DancingHappy` 一次，快速点 4 次改为 `Dizzy`；暂停时也可用。regular 模式 Pi 不把鼠标交给扩展，用命令或快捷键 |
+| 交互 | 鼠标点击 footer 上的 Clawd（fullscreen）、`/clawd pet`、`Ctrl+Alt+C`、输入里的夸奖 | 单击随机 `Excited`／`Hula`／`Waving`／`DancingHappy` 一次，快速点 4 次改为 `Dizzy`；**“谢谢／thanks／干得漂亮”等夸奖**在回合中立刻 `Excited`，在空闲时记到下个回合开头；暂停时也可用。regular 模式 Pi 不把鼠标交给扩展，用命令或快捷键 |
 | 场景／道具 | 工具类型与回合里程碑 | `Laptop`、`Desktop` 等自带道具的官方 clip；单回合工具 ≥12 次时，结束用 `Confetti` 场景代替普通舞蹈 |
 
 节奏与防抖：
 
-- 所有 clip 以官方 **12 fps** 播放；高画布 clip 借用 8×4 舞台，不放大主体。
+- 所有 clip 以官方 **12 fps** 播放；高画布 clip 借用 8×4 舞台，不放大主体；并行小 Clawd 用 **8 fps** 取帧，减少一条 footer 里的图片流量。
 - 工具 clip **至少 20 帧（约 1.66 秒）**，避免毫秒级工具导致动作闪跳；最后一个工具结束后保留 **4 帧（约 0.33 秒）** 再切回生成动画，短暂间隙里的下一个工具不会打断动作。
-- 并行工具以**最后启动**的那个决定动作；工具结束后回到仍在运行的工具。
+- 并行工具以**最后启动**的那个决定主动作；≥2 个时整块 footer 切到两只小 Clawd（最多显示最早启动的两只），工具结束后回到仍在运行的那只。
 
-状态直接来自 Pi 的 `agent_start`、`agent_settled`、`tool_execution_*`、`input`、`turn_end` 和 compact 事件：**不让模型判断动画，也不产生额外模型请求**。
+状态直接来自 Pi 的 `agent_start`、`agent_settled`、`tool_execution_*`、`message_update`（仅 `text_delta`）、`message_end`、`input`、`turn_end` 和 compact 事件：**不让模型判断动画，也不产生额外模型请求**。
 
 高画布的舞台取景：
 
@@ -97,7 +100,7 @@ npm run typecheck
 npm run preview
 ```
 
-当前 **112 个测试**通过，覆盖：全部 25 组素材的 base／delta 解码、15 组 footer 动画、8×4 舞台（占位符行号、体型不变性、边框掩码、overlay 生命周期）、六类触发（工具映射、回合收尾、空闲时钟与动作池、上下文／长回合／睡眠、交互、彩带里程碑）、并行工具、偏好恢复、PNG／文本渲染、footer 尺寸与 fallback，以及 regular/fullscreen 两种真实渲染器上的选择与复制。
+当前 **127 个测试**通过，覆盖：全部 25 组素材的 base／delta 解码、15 组 footer 动画、8×4 舞台（占位符行号、体型不变性、边框掩码、overlay 生命周期）、触发（工具映射与命令细分、回合收尾、流式说话、长任务换场、夸奖、空闲时钟与动作池、上下文／长回合／睡眠、交互、彩带里程碑）、并行工具的双 mini（4×2、独立 image id、8 fps、两种真实渲染器上恢复整只）、偏好恢复、PNG／文本渲染、footer 尺寸与 fallback，以及 regular/fullscreen 两种真实渲染器上的选择与复制。
 
 ## 版权
 

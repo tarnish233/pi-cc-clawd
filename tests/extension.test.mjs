@@ -199,6 +199,45 @@ test("the stage hides while the footer input line reaches its columns", async ()
 	assert.equal(active[0].options.row, lines.length - 4);
 	await h.emit("session_shutdown");
 });
+test("streaming text talks, and parallel tools split the footer into minis", async () => {
+	const { h, clock } = await setup("tui", true); await h.emit("session_start");
+	await h.emitRaw("agent_start");
+	await h.emitRaw("message_update", { message: { role: "assistant" }, assistantMessageEvent: { type: "text_delta", delta: "hello" } });
+	for (let i = 0; i < 30; i++) { clock.advance(84); h.footer.render(80); }
+	assert.equal(h.tui.overlays.filter(candidate => !candidate.removed).length, 1, "the talking gesture borrows one stage row");
+	await h.emitRaw("message_end", { message: { role: "assistant" } });
+	for (let i = 0; i < 20; i++) clock.advance(84);
+	assert.equal(h.tui.overlays.filter(candidate => !candidate.removed).length, 0, "the desk loop needs no stage");
+
+	h.tui.terminal.output = "";
+	await h.emitRaw("tool_execution_start", { toolCallId: "a", toolName: "Read", args: {} });
+	await h.emitRaw("tool_execution_start", { toolCallId: "b", toolName: "Bash", args: { command: "git commit -m ship" } });
+	for (let i = 0; i < 2; i++) clock.advance(84);
+	const lines = h.footer.render(80);
+	assert.equal(lines.length, 2);
+	assert((h.tui.terminal.output.match(/,c=4,/g) ?? []).length >= 2, "both minis upload their own half-width image");
+	assert.equal(h.tui.overlays.filter(candidate => !candidate.removed).length, 0, "two minis never borrow the stage");
+
+	for (const id of ["a", "b"]) await h.emitRaw("tool_execution_end", { toolCallId: id, isError: false });
+	for (let i = 0; i < 30; i++) clock.advance(84);
+	h.tui.terminal.output = "";
+	h.footer.render(80);
+	assert.match(h.tui.terminal.output, /,c=8,/, "the full glyph returns once one tool is left");
+	await h.emit("session_shutdown");
+});
+
+test("a praised prompt is remembered across the input and agent_start events", async () => {
+	const { h, clock } = await setup("tui", true); await h.emit("session_start");
+	await h.emitRaw("input", { text: "谢谢，Clawd" });
+	await h.emitRaw("agent_start");
+	h.tui.terminal.output = "";
+	h.footer.render(80);
+	assert(h.tui.terminal.output.includes("a=T,U=1"), "the happy squint paints on the first frame");
+	for (let i = 0; i < 24; i++) clock.advance(84);
+	assert.equal(h.tui.overlays.filter(candidate => !candidate.removed).length, 0);
+	assert.equal(h.editorSets, 0);
+	await h.emit("session_shutdown");
+});
 
 
 test("a clipped or hidden footer never moves the stage above it", async () => {
