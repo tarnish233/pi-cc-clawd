@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { getCapabilities, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { ClawdAnimation } from "./animation.ts";
 import {
 	CLAWD_COLUMNS,
@@ -40,6 +40,13 @@ export function removeFooterMarker(line: string): string {
  * corner loses its row/column diacritics, which clips the sprite's right edge.
  */
 export const GLYPH_RIGHT_MARGIN = 1;
+
+/**
+ * The standalone glyph sits in the native footer's middle, where the right-aligned
+ * model label can reach on narrow terminals. Below this width it stays hidden
+ * rather than covering footer text.
+ */
+export const STANDALONE_MIN_COLUMNS = 110;
 
 /** Preserve footer text, but use the actual image's physical width for right alignment. */
 export function rightAlignGlyph(line: string, glyph: string, width: number): string {
@@ -96,6 +103,8 @@ export class ClawdOverlay implements Component {
 	constructor(
 		private readonly getPortrait: () => ClawdPortrait | undefined,
 		private readonly getTheme: () => ExtensionContext["ui"]["theme"],
+		/** "inline" draws an untrimmed glyph, used for the standalone footer center. */
+		private readonly mode: "stage" | "inline" = "stage",
 	) {}
 
 	invalidate(): void {}
@@ -105,9 +114,10 @@ export class ClawdOverlay implements Component {
 		const portrait = this.getPortrait();
 		if (!portrait) return [];
 		const theme = this.getTheme();
-		const borderRow = STAGE_ROWS - CLAWD_ROWS - 1;
+		const borderRow = portrait.borderRow();
 		const border = theme.fg("borderMuted", "─");
-		return portrait.renderStageTop(row => row === borderRow ? border : " ");
+		const fill = (row: number) => row === borderRow ? border : " ";
+		return this.mode === "inline" ? portrait.renderInline(fill) : portrait.renderStageTop(fill);
 	}
 }
 
@@ -115,9 +125,13 @@ export class ClawdOverlay implements Component {
 export class FooterPlacement {
 	private readonly originalSetFooter: ExtensionContext["ui"]["setFooter"];
 	private portrait: ClawdPortrait | undefined;
-	private portraitKind: "footer" | "widget" | undefined;
+	private portraitKind: "footer" | "widget" | "inline" | undefined;
 	private view: Component | undefined;
 	private requestRender: (() => void) | undefined;
+	private inlineComponent: Component | undefined;
+	private inlineTui: TUI | undefined;
+	private inlineHandle: { hide(): void } | undefined;
+	private inlinePortrait: ClawdPortrait | undefined;
 	private capturedFooter = false;
 	private mounted: "footer" | "widget" | undefined;
 	private fallbackQueued = false;
@@ -170,6 +184,7 @@ export class FooterPlacement {
 		if (!enabled) this.portrait?.resetUpload();
 		if (this.mounted === "footer") this.ctx.ui.setStatus(CLAWD_FOOTER_KEY, enabled ? CLAWD_PLACEHOLDER : undefined);
 		this.view?.invalidate();
+		this.startInlineOverlay();
 		this.syncOverlay();
 		// Also redraw on hide, removing the last placeholder cells from the footer.
 		this.requestRender?.();
@@ -179,8 +194,12 @@ export class FooterPlacement {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.hideOverlay();
+		this.hideInlineOverlay();
 		this.overlayTui = undefined;
 		this.overlayComponent = undefined;
+		this.inlineTui = undefined;
+		this.inlineComponent = undefined;
+		this.inlinePortrait = undefined;
 		this.ctx.ui.setFooter = this.originalSetFooter;
 		this.ctx.ui.setWidget(CLAWD_FOOTER_KEY, undefined);
 		this.ctx.ui.setStatus(CLAWD_FOOTER_KEY, undefined);
@@ -196,17 +215,57 @@ export class FooterPlacement {
 		if (this.disposed || this.mounted === kind) return;
 		this.mounted = kind;
 		if (kind === "footer") {
+			this.hideInlineOverlay();
 			this.ctx.ui.setWidget(CLAWD_FOOTER_KEY, undefined);
 			this.ctx.ui.setStatus(CLAWD_FOOTER_KEY, this.animation.getState().enabled ? CLAWD_PLACEHOLDER : undefined);
 			return;
 		}
 		this.hideOverlay();
+		this.hideInlineOverlay();
 		this.ctx.ui.setStatus(CLAWD_FOOTER_KEY, undefined);
-		this.ctx.ui.setWidget(CLAWD_FOOTER_KEY, (tui, theme) => {
-			this.view = this.ensurePortrait(tui, "widget");
-			this.requestRender = () => tui.requestRender();
-			return this.view;
+		this.ctx.ui.setWidget(CLAWD_FOOTER_KEY, (tui) => {
+			if (typeof tui.showOverlay !== "function" || getCapabilities().images !== "kitty") {
+				// No overlay support: keep the old below-editor widget instead.
+				this.view = this.ensurePortrait(tui, "widget");
+				this.requestRender = () => tui.requestRender();
+				return this.view;
+			}
+			// A zero-line widget only captures the TUI handle: the sprite itself
+			// lives in an overlay over the footer's empty middle, so no row is
+			// reserved for it.
+			this.inlineTui ??= tui;
+			queueMicrotask(() => this.startInlineOverlay());
+			return { render: () => [], invalidate() {} };
 		}, { placement: "belowEditor" });
+	}
+
+	/**
+	 * Standalone mode without a decoratable footer: place the same 8x2 glyph in a
+	 * non-capturing overlay over the footer's empty middle. No layout row is
+	 * reserved and the prompt editor is never touched.
+	 */
+	private startInlineOverlay(): void {
+		const tui = this.inlineTui;
+		if (this.disposed || this.mounted !== "widget" || !tui || typeof tui.showOverlay !== "function" || this.inlineHandle) return;
+		const portrait = this.ensurePortrait(tui, "inline");
+		this.inlinePortrait = portrait;
+		this.inlineComponent ??= new ClawdOverlay(() => this.inlinePortrait, () => this.ctx.ui.theme, "inline");
+		try {
+			this.inlineHandle = tui.showOverlay(this.inlineComponent, {
+				anchor: "bottom-center",
+				width: CLAWD_COLUMNS,
+				maxHeight: CLAWD_ROWS,
+				nonCapturing: true,
+				visible: (width, height) => width >= STANDALONE_MIN_COLUMNS && height >= MIN_ROWS,
+			});
+		} catch {
+			this.inlineTui = undefined;
+		}
+	}
+
+	private hideInlineOverlay(): void {
+		this.inlineHandle?.hide();
+		this.inlineHandle = undefined;
 	}
 
 	private queueWidgetFallback(): void {
@@ -252,23 +311,24 @@ export class FooterPlacement {
 		this.overlayHandle = undefined;
 	}
 
-	private ensurePortrait(tui: TUI, kind: "footer" | "widget"): ClawdPortrait {
+	private ensurePortrait(tui: TUI, kind: "footer" | "widget" | "inline"): ClawdPortrait {
 		if (!this.portrait || this.portraitKind !== kind) {
 			this.hideOverlay();
 			this.overlayComponent = undefined;
 			this.portrait?.dispose();
+			const placeholders = { write: (data: string) => tui.terminal.write(data), fullRedraws: () => tui.fullRedraws };
 			this.portrait = new ClawdPortrait(
 				() => this.animation.getState(), () => this.ctx.ui.theme, () => tui.terminal.rows,
 				kind === "widget"
 					? { columns: FALLBACK_COLUMNS, rows: FALLBACK_ROWS }
-					: {
-						placeholders: { write: data => tui.terminal.write(data), fullRedraws: () => tui.fullRedraws },
-						stageRows: STAGE_ROWS,
-					},
+					: kind === "inline"
+						? { columns: CLAWD_COLUMNS, rows: CLAWD_ROWS, stageRows: CLAWD_ROWS, borderRow: -1, placeholders }
+						: { placeholders, stageRows: STAGE_ROWS },
 			);
 			this.portraitKind = kind;
 		}
 		if (kind === "footer") this.overlayTui = tui;
+		if (kind === "inline") this.inlinePortrait = this.portrait;
 		return this.portrait;
 	}
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 - 2026-11-19
+
+- Standalone mode without a decoratable footer now keeps the 8×2 glyph centered over the native footer instead of reserving a `belowEditor` row; the overlay hides below 110 columns where the footer's model label reaches the middle.
+- Terminals without Kitty keep the four-row half-block text widget: shrinking the same art into two rows loses the pixel size that makes the sprite readable.
+- Remove the braille experiment; the inline overlay renders both glyph rows without a border row, and the footer stage keeps its border-preserving mask.
+
 ## 0.5.0 - 2026-11-18
 
 - Enable all 25 official clips for `/clawd play`; the 15 compact canvases keep the original 8×2 framing.

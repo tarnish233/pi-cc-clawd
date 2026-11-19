@@ -4,7 +4,7 @@ import { load, makeTheme } from "./helpers.mjs";
 import { decodePng } from "./png-helpers.mjs";
 const { ClawdPortrait, CLAWD_COLUMNS, CLAWD_ROWS, OVERLAY_ROWS, STAGE_ROWS } = await load("sprite.ts");
 const { ClawdOverlay } = await load("footer-adapter.ts");
-const { setCapabilities, setCellDimensions, visibleWidth } = await load("@earendil-works/pi-tui");
+const { setCapabilities, setCellDimensions, visibleWidth, stripTerminalSequences } = await load("@earendil-works/pi-tui");
 const theme = await makeTheme();
 
 function setup(clip) {
@@ -121,4 +121,30 @@ test("the stage is unavailable without Kitty placeholders", () => {
 	setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
 	setCellDimensions({ widthPx: Infinity, heightPx: 18 });
 	assert.equal(portrait.stageActive(), false);
+});
+
+test("the inline glyph keeps both editor rows and only breaks the border where it draws", () => {
+	setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+	setCellDimensions({ widthPx: 9, heightPx: 18 });
+	const state = { enabled: true, motion: true, pose: "standing" };
+	const portrait = new ClawdPortrait(() => state, () => theme, () => 32, {
+		placeholders: { write: () => {}, fullRedraws: () => 0 },
+		columns: CLAWD_COLUMNS,
+		rows: CLAWD_ROWS,
+		stageRows: CLAWD_ROWS,
+		borderRow: CLAWD_ROWS - 1,
+	});
+	const lines = portrait.renderInline(row => row === CLAWD_ROWS - 1 ? "─" : " ");
+	assert.equal(lines.length, CLAWD_ROWS);
+	assert(lines[0].includes("\u{10eeee}"));
+	assert(lines[1].includes("\u{10eeee}"));
+	const border = [...stripTerminalSequences(lines[1])];
+	assert(border.includes("─"));
+	assert.equal(visibleWidth(lines[1]), CLAWD_COLUMNS);
+	assert.equal(portrait.borderRow(), CLAWD_ROWS - 1);
+	state.enabled = false;
+	assert.deepEqual(portrait.renderInline(() => "─"), []);
+	state.enabled = true;
+	setCapabilities({ images: "iterm2", trueColor: true, hyperlinks: true });
+	assert.deepEqual(portrait.renderInline(() => "─"), []);
 });

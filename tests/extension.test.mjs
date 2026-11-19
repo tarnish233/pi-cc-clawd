@@ -4,7 +4,8 @@ import { FakeClock,extensionHarness,load } from "./helpers.mjs";
 const {createClawdExtension}=await load("index.ts");
 const {PREFERENCES_ENTRY}=await load("preferences.ts");
 const {CLAWD_PLACEHOLDER}=await load("footer-adapter.ts");
-const {FALLBACK_ROWS,CLAWD_COLUMNS,CLAWD_ROWS,OVERLAY_ROWS}=await load("sprite.ts");
+const {FALLBACK_ROWS,TEXT_ROWS,CLAWD_COLUMNS,CLAWD_ROWS,OVERLAY_ROWS}=await load("sprite.ts");
+const {visibleWidth}=await load("@earendil-works/pi-tui");
 
 async function setup(mode="tui",withFooter=false) {
 	const h=await extensionHarness(mode);const clock=new FakeClock();
@@ -34,12 +35,39 @@ for(const mode of ["rpc","print","json"]) {
 	});
 }
 
-test("without a captured custom footer use one below-editor widget, never an above-prompt portrait",async()=>{
+test("without a captured footer the glyph sits inside the editor lines and reserves no row",async()=>{
 	const {h,clock}=await setup();await h.emit("session_start");
 	assert.equal(h.editorSets,0);assert.equal(h.editor.render(80).length,3);assert.equal(h.footerSets,0);
-	assert.equal(h.widget.placement,"belowEditor");assert.equal(h.widget.component.render(80).length,FALLBACK_ROWS);
+	assert.equal(h.widget.placement,"belowEditor");
+	assert.equal(h.widget.component.render(80).length,0); // zero rows: the overlay owns the pixels
 	assert.equal(h.statuses.size,0);
-	await h.emit("session_shutdown");assert.equal(clock.jobs.size,0);assert.equal(h.widget,undefined);
+	await Promise.resolve();
+	assert.equal(h.tui.overlays.length,1);
+	const overlay=h.tui.overlays[0];
+	assert.equal(overlay.options.anchor,"bottom-center");
+	assert.equal(overlay.options.width,8);
+	assert.equal(overlay.options.maxHeight,2);
+	assert.equal(overlay.options.nonCapturing,true);
+	assert.equal(overlay.options.margin,undefined);
+	const inline=overlay.component.render(8);
+	assert.equal(inline.length,2);
+	assert(inline.every(line=>visibleWidth(line)===8));
+	assert(inline.every(line=>line.includes("\u{10eeee}")));
+	assert(!inline[1].includes("─")); // the footer middle has no border to preserve
+	h.editor.setText("x".repeat(80));assert.equal(overlay.component.render(8).length,2);
+	await h.emit("session_shutdown");assert.equal(clock.jobs.size,0);assert.equal(h.widget,undefined);assert.equal(overlay.removed,true);
+});
+
+test("a terminal without Kitty keeps the chunky four-row text widget",async()=>{
+	const {h,clock}=await setup();
+	const {setCapabilities}=await load("@earendil-works/pi-tui");
+	setCapabilities({images:null,trueColor:true,hyperlinks:true});
+	await h.emit("session_start");
+	assert.equal(h.widget.placement,"belowEditor");
+	assert.equal(h.widget.component.render(80).length,TEXT_ROWS);
+	assert.equal(h.tui.overlays.length,0);
+	await h.emit("session_shutdown");
+	assert.equal(clock.jobs.size,0);
 });
 
 test("on/off/pause/resume preserve the editor, footer factory and input draft",async()=>{
@@ -62,7 +90,8 @@ test("clearing the custom footer removes the marker and restores the native fall
 	assert(h.footer.render(80)[0].includes("\u{10eeee}"));assert.equal(h.widget,undefined);
 	h.ctx.ui.setFooter(undefined);
 	assert.equal(h.footer,undefined);assert.equal(h.statuses.size,0);
-	assert.equal(h.widget.placement,"belowEditor");assert.equal(h.widget.component.render(80).length,FALLBACK_ROWS);
+	assert.equal(h.widget.placement,"belowEditor");assert.equal(h.widget.component.render(80).length,0);
+	await Promise.resolve();assert.equal(h.tui.overlays.length,1);
 	assert.equal(h.editorSets,0);assert.equal(clock.jobs.size,1);
 	await h.emit("session_shutdown");assert.equal(clock.jobs.size,0);
 });

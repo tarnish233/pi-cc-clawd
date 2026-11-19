@@ -106,6 +106,7 @@ export async function extensionHarness(mode = "tui", baseFactory) {
 		ui: {
 			get theme() { return env.theme; },
 			getEditorComponent: () => baseFactory,
+			getEditorText: () => editor.getText(),
 			setEditorComponent: forbidden,
 			notify: (...args) => notices.push(args),
 			setEditorText: forbidden,

@@ -11,6 +11,7 @@ export const CLAWD_ROWS = 2;
 /** Extra canvas rows borrowed from the editor's blank right margin (see ClawdOverlay). */
 export const OVERLAY_ROWS = 2;
 export const STAGE_ROWS = CLAWD_ROWS + OVERLAY_ROWS;
+/** Nominal footprint of the below-editor text widget; it renders TEXT_ROWS rows. */
 export const FALLBACK_COLUMNS = 4;
 export const FALLBACK_ROWS = 1;
 export const TEXT_COLUMNS = SOURCE_COLUMNS / 2;
@@ -81,6 +82,8 @@ export interface PortraitOptions {
 	placeholders?: KittyPlaceholderTransport;
 	/** Canvas rows when placeholders span more than the footer, e.g. the editor overlay stage. */
 	stageRows?: number;
+	/** Stage row holding the editor's bottom border; `-1` disables border preservation. */
+	borderRow?: number;
 }
 
 const KITTY_PLACEHOLDER = "\u{10eeee}";
@@ -107,6 +110,7 @@ export class ClawdPortrait implements Component {
 	private readonly columns: number;
 	private readonly rows: number;
 	private readonly stageRows: number;
+	private readonly borderLine: number;
 	private readonly inset: number;
 
 	constructor(
@@ -118,6 +122,7 @@ export class ClawdPortrait implements Component {
 		this.columns = options.columns ?? CLAWD_COLUMNS;
 		this.rows = options.rows ?? CLAWD_ROWS;
 		this.stageRows = Math.max(this.rows, Math.floor(options.stageRows ?? this.rows));
+		this.borderLine = options.borderRow ?? this.stageRows - this.rows - 1;
 		this.inset = options.inset ?? 0;
 	}
 
@@ -211,18 +216,42 @@ export class ClawdPortrait implements Component {
 		const mask = this.stageMask(frame, cell.widthPx, cell.heightPx);
 		const first = Math.min(OVERLAY_ROWS, this.stageRows - this.rows) - count;
 		const foreground = this.placeholderForeground();
-		const lines: string[] = [];
-		for (let index = 0; index < count; index++) {
-			const row = first + index;
-			let line = "";
-			for (let column = 0; column < this.columns; column++) {
-				line += mask[row]?.[column]
-					? foreground + KITTY_PLACEHOLDER + ROW_COLUMN_DIACRITICS[row] + ROW_COLUMN_DIACRITICS[column] + "\x1b[39m"
-					: fill(row);
-			}
-			lines.push(line);
+		return Array.from({ length: count }, (_, index) => this.stageLine(mask, first + index, foreground, fill));
+	}
+
+	/**
+	 * Both glyph rows for an overlay placed inside the editor's own lines. Unlike
+	 * `renderStageTop`, rows are never trimmed: the whole rectangle belongs to the
+	 * sprite, the border row is repainted where transparent, and callers hide it
+	 * entirely when the prompt text reaches those columns.
+	 */
+	renderInline(fill: (stageRow: number) => string): string[] {
+		const state = this.getState();
+		if (!state.enabled || this.disposed || !this.options.placeholders) return [];
+		const cell = getCellDimensions();
+		if (![cell.widthPx, cell.heightPx].every(size => Number.isFinite(size) && size >= 1 && size <= 1024)) return [];
+		if (getCapabilities().images !== "kitty") return [];
+		const frame = portraitFrame(state);
+		this.preparePlaceholders(frame, cell.widthPx, cell.heightPx);
+		const mask = this.stageMask(frame, cell.widthPx, cell.heightPx);
+		const first = this.stageRows - this.rows;
+		const foreground = this.placeholderForeground();
+		return Array.from({ length: this.rows }, (_, index) => this.stageLine(mask, first + index, foreground, fill));
+	}
+
+	/** Stage row that carries the editor's bottom border, or -1 when there is none. */
+	borderRow(): number {
+		return this.borderLine;
+	}
+
+	private stageLine(mask: boolean[][], row: number, foreground: string, fill: (stageRow: number) => string): string {
+		let line = "";
+		for (let column = 0; column < this.columns; column++) {
+			line += mask[row]?.[column]
+				? foreground + KITTY_PLACEHOLDER + ROW_COLUMN_DIACRITICS[row] + ROW_COLUMN_DIACRITICS[column] + "\x1b[39m"
+				: fill(row);
 		}
-		return lines;
+		return line;
 	}
 
 	/** How many stage lines above the footer this frame needs (0 means no overlay). */
@@ -312,8 +341,10 @@ export class ClawdPortrait implements Component {
 		// The row directly above the footer holds the editor's bottom border. Only a
 		// sprite pixel actually crossing that glyph may replace the cell; otherwise a
 		// stray confetti bit would erase a whole border segment.
-		const borderRow = this.stageRows - this.rows - 1;
-		const borderLine = borderRow >= 0 ? Math.floor(borderRow * geometry.cellHeight + geometry.cellHeight / 2) : -1;
+		const borderRow = this.borderLine;
+		const borderLine = borderRow >= 0 && borderRow < this.stageRows
+			? Math.floor(borderRow * geometry.cellHeight + geometry.cellHeight / 2)
+			: -1;
 		for (let y = 0; y < geometry.heightPx; y++) {
 			const sourceY = Math.floor((y + 0.5 - top) / scale);
 			if (sourceY < 0 || sourceY >= frame.height) continue;
