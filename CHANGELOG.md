@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 - 2026-11-19
+
+- Give every idle clip a guaranteed slot: idle acts now draw from a shuffled weighted bag, so `JumpingHappy` and `BreakDancing` (previously manual-only) appear automatically, along with all thirteen existing idle acts.
+- Map MCP tools to `Spark`, use `JumpingHappy` for a quick tool-free success and `BreakDancing` for every tenth success, so all 25 official animations now have an automatic trigger.
+- Click the mascot in the footer or on the stage overlay (fullscreen renderer) for a happy one-shot; four quick clicks spin it dizzy.
+- Keep the existing `/clawd pet` command and Ctrl+Alt+C shortcut as the regular-mode path, where Pi does not deliver mouse events to extensions.
+
 ## 0.6.0 - 2026-11-19
 
 - Map each tool family to its own official clip: reading, editing (laptop scene), shell, web search, subagents, questions and todo plans, with the crab walk as the default.

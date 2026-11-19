@@ -30,7 +30,7 @@ test("blinks run on their own 4-7 second clock", () => {
 	h.animation.dispose();
 });
 
-for (const [choice,pose] of [[0,"look-left"],[4/40,"look-right"]]) {
+for (const [choice,pose] of [[0,"look-left"],[4/42,"look-right"]]) {
 	test("occasional " + pose + " has a short fixed hold", () => {
 		// wake (2), the 4 s blink's next-blink draw (1), the act delay (1), then the pick (1)
 		const values = [0,0,0,0,choice]; const h = setup(() => values.shift() ?? 0);
@@ -90,8 +90,8 @@ test("agent work loops Desktop frames instead of scheduling idle motions", () =>
 	h.clock.advance(84); assert.equal(h.animation.getState().clip.name, "Desktop");
 	assert(h.animation.getState().clip.frame > 2); assert.equal(h.clock.jobs.size, 1);
 	h.animation.agentSettled(false);
-	assert.deepEqual(h.animation.getState().clip, { name:"DancingHappy", frame:0 });
-	h.clock.advance(3400);assert.equal(h.animation.getState().activity, "idle");
+	assert.deepEqual(h.animation.getState().clip, { name:"JumpingHappy", frame:0 });
+	h.clock.advance(1800);assert.equal(h.animation.getState().activity, "idle");
 	assert.equal(h.animation.getState().clip, undefined);assert.equal(h.clock.jobs.size, 1);
 	h.animation.dispose();
 });
@@ -168,7 +168,8 @@ test("each tool family picks its own official clip", () => {
 		["Edit", "Laptop"], ["Write", "Laptop"],
 		["Bash", "Running"], ["WebSearch", "LookingAroundEyesOnly"], ["fetch_content", "LookingAroundEyesOnly"],
 		["Agent", "Waving"], ["AskUserQuestion", "Pointing"], ["TodoWrite", "Thinking"],
-		["mcp__custom__tool", "CrabWalking"],
+		["mcp__custom__tool", "Spark"],
+		["some_unknown_tool", "CrabWalking"],
 	];
 	for (const [tool, clip] of cases) {
 		const h = setup(); h.animation.start(); h.animation.agentStart();
@@ -344,7 +345,7 @@ test("a crowded crossing waits while paused and plays after resume", () => {
 });
 
 test("unknown tool names never fall through to Object.prototype", () => {
-	for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty", "mcp__odd"]) {
+	for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty", "some_unknown_tool"]) {
 		const h = setup(); h.animation.start(); h.animation.agentStart();
 		h.animation.toolStart("t", name);
 		assert.equal(h.animation.getState().clip.name, "CrabWalking", `${name} must use the fallback`);
@@ -393,4 +394,36 @@ test("a success after a tool error is not lost behind the Facepalm one-shot", ()
 	assert.equal(h.animation.getState().activity, "success");
 	assert.deepEqual(h.animation.getState().clip, { name: "DancingHappy", frame: 0 });
 	h.animation.dispose();
+});
+
+test("a fourth quick click spins instead of another happy move", () => {
+	const h = setup(); h.animation.start();
+	assert.equal(h.animation.poke(4), true);
+	assert.deepEqual(h.animation.getState().clip, { name: "Dizzy", frame: 0 });
+	h.animation.dispose();
+});
+
+test("the tenth success gets the breakdance, quick empty turns get a happy hop", () => {
+	const h = setup(); h.animation.start();
+	for (let i = 0; i < 9; i++) { h.animation.agentStart(); h.animation.agentSettled(false); }
+	assert.equal(h.animation.getState().clip.name, "JumpingHappy");
+	h.animation.agentStart(); h.animation.agentSettled(false);
+	assert.equal(h.animation.getState().clip.name, "BreakDancing");
+	h.animation.dispose();
+});
+
+test("the idle bag reaches every idle clip", () => {
+	const clock = new FakeClock();
+	const noon = new Date(2026, 0, 1, 12, 0, 0).getTime();
+	const animation = new ClawdAnimation(() => {}, clock.schedule, () => 0.5, { now: () => noon + clock.time });
+	animation.start();
+	const seen = new Set();
+	for (let i = 0; i < 5400; i++) {
+		clock.advance(100);
+		const clip = animation.getState().clip;
+		if (clip) seen.add(clip.name);
+	}
+	const idle = ["LookingAround", "LookingAroundEyesOnly", "Turning", "Swaying", "Walking", "Excited", "Hula", "Dizzy", "Jumping", "Waving", "Lightbulb", "Spark", "Confetti", "JumpingHappy", "BreakDancing"];
+	for (const name of idle) assert(seen.has(name), `${name} must appear from the idle bag`);
+	animation.dispose();
 });

@@ -187,3 +187,39 @@ for (const fullscreen of [false, true]) {
 		}
 	});
 }
+
+test("real fullscreen renderer pets Clawd on a footer click", async () => {
+	const env = await makeEditorEnvironment(); setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true }); setCellDimensions({ widthPx: 9, heightPx: 18 });
+	const terminal = new Terminal(); const tui = new TuiAltScreen(terminal, false, undefined, { copyOnSelect: false });
+	const editor = new CustomEditor(tui, env.editorTheme, env.keybindings, { embedWorkingStatus: true }); editor.setText("");
+	let placement;
+	const animation = new ClawdAnimation(() => placement.refresh(), () => () => {}, () => 0);
+	const statuses = new Map(); let footer;
+	const footerData = { getExtensionStatuses: () => new Map(statuses), getGitBranch: () => "main", getAvailableProviderCount: () => 1, onBranchChange: () => () => {} };
+	const ctx = { ui: {
+		get theme() { return env.theme; },
+		getEditorText: () => editor.getText(),
+		setFooter(factory) { footer = factory?.(tui, env.theme, footerData); },
+		setStatus(key, text) { if (text === undefined) statuses.delete(key); else statuses.set(key, text); },
+		setWidget() {},
+	} };
+	placement = new FooterPlacement(ctx, animation); placement.prepare();
+	ctx.ui.setFooter(() => ({ render: () => ["model", "cwd · main · " + (statuses.get(CLAWD_FOOTER_KEY) ?? "")], invalidate() {} }));
+	placement.mountDefault(); animation.start();
+	tui.setLayoutRoot(new VStack([editor, footer])); tui.setFocus(editor); tui.start();
+	try {
+		tui.renderNow();
+		const rows = tui.getScreenLines().map(stripTerminalSequences);
+		const modelRow = rows.findIndex(line => line.includes("model"));
+		assert(modelRow >= 0);
+		assert.equal(animation.getState().clip, undefined);
+		const x = terminal.columns - 5; // inside the rightmost eight cells
+		const y = modelRow + 2; // the footer's second row, SGR is one-based
+		terminal.input(`\x1b[<0;${x};${y}M`);
+		terminal.input(`\x1b[<0;${x};${y}m`);
+		const clip = animation.getState().clip;
+		assert(clip && ["Excited", "Hula", "Waving", "DancingHappy"].includes(clip.name));
+	} finally {
+		tui.stop(); animation.dispose(); placement.dispose();
+	}
+});

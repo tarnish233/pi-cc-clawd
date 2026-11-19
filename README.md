@@ -27,11 +27,11 @@ Pi footer 右侧的 Clawd：跟着 Agent 状态做小动作的官方像素动画
 
 | 类别 | 触发 | 动作 |
 | --- | --- | --- |
-| 工具映射 | `tool_execution_start` 的 `toolName` | `read`/`grep`/`find`/`ls` → `LookingAround`；`edit`/`write` → `Laptop`；`bash` → `Running`；`web_search`/`fetch_content` → `LookingAroundEyesOnly`；`agent`/`task` → `Waving`；`ask_user_question` → `Pointing`；`todo_write` → `Thinking`；其它 → `CrabWalking` |
-| 回合节点 | `agent_start`、流式输入、`turn_end`、`agent_settled` | 生成中 `Desktop`；steer／follow-up 提示 `Jumping`；正常结束 `DancingHappy`；中断 `Disappointed`；失败 `Facepalm`；compact `Meditating` |
-| 空闲小动作 | 眨眼独立每 4–7 秒一次；小动作每 6–10 秒一次（上下文紧张时 4–6 秒） | 眨眼不再占用小动作名额，避免一套动作里近一半都是眨眼；小动作池为左右看 + 8 组短动画（张望、扫视、转身、摇摆、走动、兴奋、呼啦、眩晕）与 5 组高画布（跳跃、挥手、灯泡、火花、彩带，低概率） |
+| 工具映射 | `tool_execution_start` 的 `toolName` | `read`/`grep`/`find`/`ls` → `LookingAround`；`edit`/`write` → `Laptop`；`bash` → `Running`；`web_search`/`fetch_content` → `LookingAroundEyesOnly`；`agent`/`task` → `Waving`；`ask_user_question` → `Pointing`；`todo_write` → `Thinking`；MCP 工具 → `Spark`；其它 → `CrabWalking` |
+| 回合节点 | `agent_start`、流式输入、`turn_end`、`agent_settled` | 生成中 `Desktop`；steer／follow-up 提示 `Jumping`；快速（≤15 秒）空回合结束 `JumpingHappy`，普通结束 `DancingHappy`，每第 10 次成功 `BreakDancing`，单回合 ≥12 次工具 `Confetti`；中断 `Disappointed`；失败 `Facepalm`；compact `Meditating` |
+| 空闲小动作 | 眨眼独立每 4–7 秒一次；小动作每 6–10 秒一次（上下文紧张时 4–6 秒） | 眨眼不再占用小动作名额，避免一套动作里近一半都是眨眼；小动作池为左右看 + 8 组短动画（张望、扫视、转身、摇摆、走动、兴奋、呼啦、眩晕）与 7 组高画布（跳跃、挥手、灯泡、火花、彩带、跳跃开心、街舞）；用洗牌袋抽取，保证每一组在一轮内都会出现 |
 | 系统状态 | 上下文百分比、回合时长、时段 | ≥85% 触发一次 `Dizzy`；同一回合生成 ≥2 分钟改用 `Swaying`；空闲 10 分钟（夜间 3 分钟）进入 `Meditating` 慢速睡眠，任意事件唤醒 |
-| 交互 | `/clawd pet`、`Ctrl+Alt+C` | 随机 `Excited`／`Hula`／`Waving`／`DancingHappy` 一次，暂停时也可用 |
+| 交互 | 鼠标点击 footer 上的 Clawd（fullscreen）、`/clawd pet`、`Ctrl+Alt+C` | 单击随机 `Excited`／`Hula`／`Waving`／`DancingHappy` 一次，快速点 4 次改为 `Dizzy`；暂停时也可用。regular 模式 Pi 不把鼠标交给扩展，用命令或快捷键 |
 | 场景／道具 | 工具类型与回合里程碑 | `Laptop`、`Desktop` 等自带道具的官方 clip；单回合工具 ≥12 次时，结束用 `Confetti` 场景代替普通舞蹈 |
 
 节奏与防抖：
@@ -59,6 +59,7 @@ Pi footer 右侧的 Clawd：跟着 Agent 状态做小动作的官方像素动画
 | `/clawd pet` | 摸一下，随机播放一个开心动作（暂停也可用） |
 | `/clawd play <名称>` | 播放任意一组官方动画，补全列出全部 25 组 |
 | `Ctrl+Alt+C` | 等同 `/clawd pet` |
+| 鼠标点击 Clawd | 等同 `/clawd pet`（仅 fullscreen 模式；点舞台 overlay 同样有效） |
 
 偏好作为本会话的扩展条目保存，`/reload` 或恢复会话后保留。命令不调用模型、不发聊天消息、不消耗 token，也不重建编辑器或清除输入草稿。
 
@@ -83,6 +84,7 @@ pi install npm:pi-cc-clawd
 - overlay 会覆盖编辑器最后两行的右侧 8 列：编辑、子代理、提问、计划等带高画布道具的工具动作，以及 `/clawd play` 的高画布动画，都会临时占用这里；存在 `belowEditor` widget 时会压到 widget，自动补全或 `/` 菜单展开时右侧 8 列可能被遮住。
 - 播放高画布动画期间，选中编辑器最后一行右侧有像素的格子可能复制出占位符字符；footer 两行的复制不受影响。
 - 非 Kitty 终端没有 footer 显示（见上）。
+- 鼠标点击只覆盖玻璃上的 8×2 格：从这些格子开始拖选不会选中 footer 文本；其余位置的选择、复制不受影响。regular 模式 Pi 不提供扩展鼠标事件，只能使用命令或快捷键。
 
 ## 开发
 
@@ -95,7 +97,7 @@ npm run typecheck
 npm run preview
 ```
 
-当前 **106 个测试**通过，覆盖：全部 25 组素材的 base／delta 解码、15 组 footer 动画、8×4 舞台（占位符行号、体型不变性、边框掩码、overlay 生命周期）、六类触发（工具映射、回合收尾、空闲时钟与动作池、上下文／长回合／睡眠、交互、彩带里程碑）、并行工具、偏好恢复、PNG／文本渲染、footer 尺寸与 fallback，以及 regular/fullscreen 两种真实渲染器上的选择与复制。
+当前 **112 个测试**通过，覆盖：全部 25 组素材的 base／delta 解码、15 组 footer 动画、8×4 舞台（占位符行号、体型不变性、边框掩码、overlay 生命周期）、六类触发（工具映射、回合收尾、空闲时钟与动作池、上下文／长回合／睡眠、交互、彩带里程碑）、并行工具、偏好恢复、PNG／文本渲染、footer 尺寸与 fallback，以及 regular/fullscreen 两种真实渲染器上的选择与复制。
 
 ## 版权
 

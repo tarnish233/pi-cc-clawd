@@ -41,7 +41,7 @@ export interface ClawdAnimationOptions {
 }
 
 /** What a tool call looks like while it runs. */
-export type ClawdToolGroup = "read" | "edit" | "shell" | "search" | "agent" | "ask" | "todo" | "other";
+export type ClawdToolGroup = "read" | "edit" | "shell" | "search" | "agent" | "ask" | "todo" | "magic" | "other";
 
 /**
  * Tool calls borrow the official clips that already carry the right prop:
@@ -57,6 +57,7 @@ export const TOOL_CLIPS: Readonly<Record<ClawdToolGroup, OfficialSpriteName>> = 
 	agent: "Waving",
 	ask: "Pointing",
 	todo: "Thinking",
+	magic: "Spark",
 	other: "CrabWalking",
 };
 
@@ -71,7 +72,9 @@ const TOOL_GROUPS: ReadonlyMap<string, ClawdToolGroup> = new Map([
 ]);
 
 export function toolGroup(name: string): ClawdToolGroup {
-	return TOOL_GROUPS.get(name.toLowerCase()) ?? "other";
+	const key = name.toLowerCase();
+	if (key.startsWith("mcp__")) return "magic";
+	return TOOL_GROUPS.get(key) ?? "other";
 }
 
 interface LoopSpec {
@@ -110,7 +113,12 @@ const STAGE_IDLE_CLIPS: readonly [OfficialSpriteName, number][] = [
 	["Lightbulb", 1],
 	["Spark", 1],
 	["Confetti", 1],
+	["JumpingHappy", 1],
+	["BreakDancing", 1],
 ];
+
+/** Every clip appears once per bag: weighted repeats make the common ones frequent. */
+const IDLE_CLIP_WEIGHT = [...FOOTER_IDLE_CLIPS, ...STAGE_IDLE_CLIPS].reduce((total, [, weight]) => total + weight, 0);
 
 /**
  * Blinking is an ambient tic, not one of the idle acts: it runs on its own
@@ -136,6 +144,8 @@ export const SLEEP_MS = 10 * 60_000;
 export const NIGHT_SLEEP_MS = 3 * 60_000;
 /** Tools in one turn before success ends with the confetti scene instead of a dance. */
 export const MILESTONE_TOOLS = 12;
+/** A tool-free turn faster than this ends with the happy hop instead of the dance. */
+export const QUICK_TURN_MS = 15_000;
 export const CROWDED_PERCENT = 85;
 
 /** One cancellable timer drives idle delays, hold checks and 12 fps clip playback. */
@@ -158,6 +168,8 @@ export class ClawdAnimation {
 	private idleSince = 0;
 	private nextBlinkAt = 0;
 	private nextActionAt = 0;
+	private idleBag: OfficialSpriteName[] = [];
+	private successes = 0;
 	private context = 0;
 	private crowdedShown = false;
 	private readonly now: () => number;
@@ -234,6 +246,7 @@ export class ClawdAnimation {
 		// The error one-shot is already playing; do not restart it or turn it into a success.
 		if (failed && this.activity === "error" && this.clip?.name === "Facepalm" && this.clipOwner === "activity") return;
 		this.activity = aborted ? "interrupted" : failed ? "error" : "success";
+		if (this.activity === "success") this.successes += 1;
 		this.enterActivity(true);
 	}
 
@@ -310,9 +323,14 @@ export class ClawdAnimation {
 
 	/** Petting reacts with a happy one-shot, even while autonomous motion is paused. */
 	pet(): boolean {
+		return this.poke(1);
+	}
+
+	/** A click: one happy move, or a dizzy spin when clicked four times quickly. */
+	poke(clickCount = 1): boolean {
 		if (!this.started || this.disposed || !this.preferences.enabled) return false;
 		this.wake();
-		const clips: OfficialSpriteName[] = ["Excited", "Hula", "Waving", "DancingHappy"];
+		const clips: OfficialSpriteName[] = clickCount >= 4 ? ["Dizzy"] : ["Excited", "Hula", "Waving", "DancingHappy"];
 		this.playOnce(this.pick(clips), () => this.enterActivity(true), "manual");
 		return true;
 	}
@@ -378,7 +396,7 @@ export class ClawdAnimation {
 				this.switchTo(loopOf("Meditating"), immediate);
 				break;
 			case "success": {
-				const name = this.turnTools >= MILESTONE_TOOLS ? "Confetti" : "DancingHappy";
+				const name = this.successClip();
 				const dance = () => this.playOnce(name, () => {
 					this.activity = "idle";
 					this.enterActivity(true);
@@ -444,6 +462,13 @@ export class ClawdAnimation {
 
 	private resumeTarget(): ClawdActivity {
 		return this.agentActive ? (this.tools.size ? "tools" : "working") : "idle";
+	}
+
+	private successClip(): OfficialSpriteName {
+		if (this.turnTools >= MILESTONE_TOOLS) return "Confetti";
+		if (this.successes % 10 === 0) return "BreakDancing";
+		if (this.turnTools === 0 && this.now() - this.turnStartedAt < QUICK_TURN_MS) return "JumpingHappy";
+		return "DancingHappy";
 	}
 
 	private workingSpec(): LoopSpec {
@@ -589,7 +614,7 @@ export class ClawdAnimation {
 
 	private idleAction(): void {
 		if (!this.ready || this.activity !== "idle") return;
-		const roll = this.random() * this.actionWeight();
+		const roll = this.random() * (LOOK_WEIGHT * 2 + IDLE_CLIP_WEIGHT);
 		if (roll < LOOK_WEIGHT) {
 			this.playBuiltin("look-left", 650);
 			return;
@@ -598,27 +623,23 @@ export class ClawdAnimation {
 			this.playBuiltin("look-right", 650);
 			return;
 		}
-		this.playOnce(this.pickActionClip(roll - LOOK_WEIGHT * 2), () => this.enterActivity(true));
+		this.playOnce(this.drawIdleClip(), () => this.enterActivity(true));
 	}
 
-	private actionWeight(): number {
-		let total = LOOK_WEIGHT * 2;
-		for (const [, weight] of FOOTER_IDLE_CLIPS) total += weight;
-		for (const [, weight] of STAGE_IDLE_CLIPS) total += weight;
-		return total + (this.crowded ? 8 : 0); // extra Dizzy while crowded
-	}
-
-	private pickActionClip(roll: number): OfficialSpriteName {
-		let remaining = roll;
-		for (const [name, weight] of FOOTER_IDLE_CLIPS) {
-			remaining -= weight;
-			if (remaining < 0) return name;
+	/** A bag of every idle clip, so none of the official animations can starve. */
+	private drawIdleClip(): OfficialSpriteName {
+		if (this.idleBag.length === 0) {
+			const bag: OfficialSpriteName[] = [];
+			for (const [name, weight] of FOOTER_IDLE_CLIPS) for (let i = 0; i < weight; i++) bag.push(name);
+			for (const [name, weight] of STAGE_IDLE_CLIPS) for (let i = 0; i < weight; i++) bag.push(name);
+			if (this.crowded) for (let i = 0; i < 8; i++) bag.push("Dizzy");
+			for (let i = bag.length - 1; i > 0; i--) {
+				const j = Math.floor(this.random() * (i + 1));
+				[bag[i], bag[j]] = [bag[j]!, bag[i]!];
+			}
+			this.idleBag = bag;
 		}
-		for (const [name, weight] of STAGE_IDLE_CLIPS) {
-			remaining -= weight;
-			if (remaining < 0) return name;
-		}
-		return "Dizzy"; // crowded extra weight
+		return this.idleBag.pop()!;
 	}
 
 	private playBuiltin(pose: ClawdPose, durationMs: number): void {

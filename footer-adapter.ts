@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getCapabilities, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { getCapabilities, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { ClawdAnimation } from "./animation.ts";
 import {
 	hasFooterPlaceholder,
@@ -62,11 +62,35 @@ export function rightAlignGlyph(line: string, glyph: string, width: number): str
  * line two may contain the marker: native footer puts extension statuses on line
  * three, so it is intentionally not treated as a compatible two-line footer.
  */
-export function decorateFooter<T extends Component>(base: T, portrait: ClawdPortrait, onIncompatible?: () => void): T {
+export function decorateFooter<T extends Component>(
+	base: T,
+	portrait: ClawdPortrait,
+	onIncompatible?: () => void,
+	onClick?: (clickCount: number) => void,
+): T {
 	const bound = new Map<PropertyKey, { original: Function; value: Function }>();
+	let lastWidth = 0;
 	return new Proxy(base, {
 		get(target, key, receiver) {
+			if (key === "handleMouse" && onClick) {
+				return (event: TuiMouseEvent) => {
+					if (event.button === "left" && lastWidth > 0 && (event.y === 0 || event.y === 1) && portrait.renderGlyph().length === 2) {
+						const start = lastWidth - CLAWD_COLUMNS - GLYPH_RIGHT_MARGIN;
+						if (event.x >= start && event.x < lastWidth - GLYPH_RIGHT_MARGIN) {
+							// Press must be handled to claim the gesture; the click then acts.
+							if (event.type === "press") return { handled: true, render: false } as const;
+							if (event.type === "click") {
+								onClick?.(event.clickCount ?? 1);
+								return { handled: true, render: false } as const;
+							}
+						}
+					}
+					const baseHandler = Reflect.get(target, "handleMouse", receiver);
+					return typeof baseHandler === "function" ? baseHandler.call(target, event) : undefined;
+				};
+			}
 			if (key === "render") return (width: number) => {
+				lastWidth = width;
 				const rendered = base.render(width);
 				if (rendered.length < 2 || !rendered[1].includes(CLAWD_PLACEHOLDER)) {
 					onIncompatible?.();
@@ -106,9 +130,18 @@ export class ClawdOverlay implements Component {
 		private readonly getTheme: () => ExtensionContext["ui"]["theme"],
 		/** "inline" draws an untrimmed glyph, used for the standalone footer center. */
 		private readonly mode: "stage" | "inline" = "stage",
+		private readonly onClick?: (clickCount: number) => void,
 	) {}
 
 	invalidate(): void {}
+
+	handleMouse(event: TuiMouseEvent): { handled: true; render: false } | undefined {
+		if (event.button !== "left") return undefined;
+		if (event.type === "press") return { handled: true, render: false };
+		if (event.type !== "click") return undefined;
+		this.onClick?.(event.clickCount ?? 1);
+		return { handled: true, render: false };
+	}
 
 	render(width: number): string[] {
 		if (!Number.isFinite(width) || width < 1) return [];
@@ -167,7 +200,7 @@ export class FooterPlacement {
 					// Hiding Clawd intentionally removes the marker; that is not an
 					// incompatible footer and must not trigger the widget fallback.
 					if (this.animation.getState().enabled) this.queueWidgetFallback();
-				});
+				}, count => void this.animation.poke(count));
 				this.requestRender = () => tui.requestRender();
 				this.mount("footer");
 				return this.view;
@@ -255,7 +288,7 @@ export class FooterPlacement {
 		if (this.disposed || this.mounted !== "widget" || !tui || typeof tui.showOverlay !== "function" || this.inlineHandle) return;
 		const portrait = this.ensurePortrait(tui, "inline");
 		this.inlinePortrait = portrait;
-		this.inlineComponent ??= new ClawdOverlay(() => this.inlinePortrait, () => this.ctx.ui.theme, "inline");
+		this.inlineComponent ??= new ClawdOverlay(() => this.inlinePortrait, () => this.ctx.ui.theme, "inline", count => void this.animation.poke(count));
 		try {
 			this.inlineHandle = tui.showOverlay(this.inlineComponent, {
 				anchor: "bottom-center",
@@ -311,7 +344,7 @@ export class FooterPlacement {
 		this.hideOverlay();
 		const tui = this.overlayTui;
 		if (!tui || typeof tui.showOverlay !== "function") return;
-		this.overlayComponent ??= new ClawdOverlay(() => this.portrait, () => this.ctx.ui.theme);
+		this.overlayComponent ??= new ClawdOverlay(() => this.portrait, () => this.ctx.ui.theme, "stage", count => void this.animation.poke(count));
 		try {
 			this.overlayHandle = tui.showOverlay(this.overlayComponent, {
 				anchor: "bottom-right",
