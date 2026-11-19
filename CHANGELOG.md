@@ -7,7 +7,7 @@
 - Answer praise in the prompt (`谢谢`, `thanks`, `干得漂亮`, ...) with `Excited`: immediately during a turn, and at the start of the next turn when typed while idle.
 - Turn into a talking gesture while assistant text streams (`Pointing` from the first `text_delta`), then return to the desk on `message_end` or when a tool starts.
 - Split the footer into two 4×2 mini Clawds while two or more tools run, each with its own Kitty image id and 8 fps wall-clock frames; the stage stays off in that mode and the full glyph returns when one tool is left.
-- Cover the new triggers with animation, footer and extension tests (125 tests total).
+- Cover the new triggers with animation, footer and extension tests (127 tests total).
 
 ## 0.7.0 - 2026-11-19
 
