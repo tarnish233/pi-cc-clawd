@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import type { ClawdAnimation } from "./animation.ts";
 import {
+	hasFooterPlaceholder,
 	CLAWD_COLUMNS,
 	CLAWD_ROWS,
 	ClawdPortrait,
@@ -139,6 +140,8 @@ export class FooterPlacement {
 	private overlayTui: TUI | undefined;
 	private overlayComponent: ClawdOverlay | undefined;
 	private overlayHandle: { hide(): void } | undefined;
+	private overlayRow: number | undefined;
+	private overlayHeight = 0;
 
 	constructor(private readonly ctx: ExtensionContext, private readonly animation: ClawdAnimation) {
 		this.originalSetFooter = ctx.ui.setFooter;
@@ -234,6 +237,9 @@ export class FooterPlacement {
 			// lives in an overlay over the footer's empty middle, so no row is
 			// reserved for it.
 			this.inlineTui ??= tui;
+			// The zero-line widget is the only place that captures this TUI; without
+			// this, overlay frames would never ask Pi to redraw in standalone mode.
+			this.requestRender = () => tui.requestRender();
 			queueMicrotask(() => this.startInlineOverlay());
 			return { render: () => [], invalidate() {} };
 		}, { placement: "belowEditor" });
@@ -288,27 +294,99 @@ export class FooterPlacement {
 			this.hideOverlay();
 			return;
 		}
+		const count = this.portrait?.stageTopRows() ?? 0;
+		if (count <= 0) {
+			this.hideOverlay();
+			return;
+		}
+		// Anchor to the footer's real row and skip the stage while the input line's
+		// tail is not blank; a short session must not drop it below its own body.
+		const placement = this.stagePlacement(count);
+		if (!placement || !placement.clear) {
+			this.hideOverlay();
+			return;
+		}
+		const row = placement.row;
+		if (this.overlayHandle && this.overlayRow === row && this.overlayHeight === count) return;
+		this.hideOverlay();
 		const tui = this.overlayTui;
-		if (!tui || typeof tui.showOverlay !== "function" || this.overlayHandle) return;
+		if (!tui || typeof tui.showOverlay !== "function") return;
 		this.overlayComponent ??= new ClawdOverlay(() => this.portrait, () => this.ctx.ui.theme);
 		try {
 			this.overlayHandle = tui.showOverlay(this.overlayComponent, {
 				anchor: "bottom-right",
+				row,
 				width: CLAWD_COLUMNS,
 				maxHeight: OVERLAY_ROWS,
-				margin: { right: GLYPH_RIGHT_MARGIN, bottom: CLAWD_ROWS },
+				margin: { right: GLYPH_RIGHT_MARGIN },
 				nonCapturing: true,
 				visible: (width, height) => width >= MIN_COLUMNS && height >= MIN_ROWS,
 			});
+			this.overlayRow = row;
+			this.overlayHeight = count;
 		} catch {
 			// A renderer without overlay support simply keeps the footer-only glyph.
 			this.overlayTui = undefined;
 		}
 	}
 
+	/**
+	 * Width of the real input text, ignoring this stage's own placeholders and
+	 * counting a reverse-video cursor cell as occupied.
+	 */
+	private inputLineWidth(line: string): number {
+		const withCursor = line.replace(/\x1b\[7m([\s\S]*?)\x1b\[27m/g, (_, inner: string) => "X".repeat(visibleWidth(stripTerminalSequences(inner))));
+		const withoutPlaceholders = stripTerminalSequences(withCursor).replace(/\u{10eeee}[\p{M}]+/gu, "");
+		return visibleWidth(withoutPlaceholders.replace(/\s+$/, ""));
+	}
+
+	/**
+	 * Where the stage goes, bottom-aligned to the footer, and whether the input
+	 * line's glyph columns are free. Uses the previous screen snapshot so wrapped
+	 * prompts, editor padding and a clipped footer all match what is really drawn.
+	 */
+	private stagePlacement(count: number): { row: number; clear: boolean } | undefined {
+		const tui = this.overlayTui as unknown as {
+			terminal?: { rows?: number; columns?: number };
+			getScreenLines?: () => string[];
+			captureRenderState?: () => { previousLines?: string[] };
+		} | undefined;
+		const rows = tui?.terminal?.rows ?? 0;
+		const columns = tui?.terminal?.columns ?? 0;
+		if (!tui || !rows) return undefined;
+		let lines: string[] | undefined;
+		if (typeof tui.getScreenLines === "function") lines = tui.getScreenLines();
+		else if (typeof tui.captureRenderState === "function") lines = tui.captureRenderState().previousLines;
+		else return { row: Math.max(0, rows - CLAWD_ROWS - count), clear: true }; // no screen snapshots
+		if (!lines?.length) return undefined;
+		let footerBottom = -1;
+		for (let row = 0; row < lines.length; row++) {
+			if (hasFooterPlaceholder(lines[row]!)) footerBottom = row;
+		}
+		if (footerBottom < 0) {
+				return undefined;
+		}
+		let footerRows = 1;
+		while (footerBottom - footerRows >= 0 && hasFooterPlaceholder(lines[footerBottom - footerRows]!)) footerRows += 1;
+		// The overlay row is viewport-relative; content taller than the screen is
+		// scrolled, so subtract the viewport start before placing the stage.
+		const viewport = Math.max(0, lines.length - rows);
+		const footerTop = footerBottom - viewport - footerRows + 1;
+		const row = footerTop - count;
+		if (row < 0) return undefined;
+		let clear = true;
+		if (count >= OVERLAY_ROWS) {
+			if (!columns) return undefined;
+			clear = this.inputLineWidth(lines[viewport + row] ?? "") <= columns - CLAWD_COLUMNS - GLYPH_RIGHT_MARGIN;
+		}
+		return { row, clear };
+	}
+
 	private hideOverlay(): void {
 		this.overlayHandle?.hide();
 		this.overlayHandle = undefined;
+		this.overlayRow = undefined;
+		this.overlayHeight = 0;
 	}
 
 	private ensurePortrait(tui: TUI, kind: "footer" | "widget" | "inline"): ClawdPortrait {

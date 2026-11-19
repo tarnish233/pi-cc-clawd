@@ -24,10 +24,23 @@ export function createClawdExtension(options: ClawdExtensionOptions = {}) {
 			mountedAnimation = undefined;
 		};
 
+		pi.registerShortcut("ctrl+alt+c", {
+			description: "Pet Clawd",
+			handler: () => { animation?.pet(); },
+		});
+
 		pi.on("session_start", (_event, ctx) => {
 			dispose();
 			if (ctx.mode !== "tui") return;
-			const next = new ClawdAnimation(() => placement?.refresh(), options.schedule, options.random);
+			const next = new ClawdAnimation(() => placement?.refresh(), options.schedule, options.random, {
+				contextPercent: () => {
+					try {
+						return ctx.getContextUsage()?.percent ?? null;
+					} catch {
+						return null;
+					}
+				},
+			});
 			next.setPreferences(readPreferences(ctx.sessionManager.getBranch()));
 			animation = next;
 			// Capture only a later custom footer factory. pi-cc-clawd must precede
@@ -47,10 +60,17 @@ export function createClawdExtension(options: ClawdExtensionOptions = {}) {
 		});
 
 		pi.on("agent_start", () => animation?.agentStart());
-		pi.on("agent_settled", event => animation?.agentSettled(event.aborted));
-		pi.on("tool_execution_start", event => animation?.toolStart(event.toolCallId));
+		pi.on("agent_settled", event => {
+			animation?.refreshContext();
+			animation?.agentSettled(event.aborted);
+		});
+		pi.on("tool_execution_start", event => animation?.toolStart(event.toolCallId, event.toolName));
 		pi.on("tool_execution_end", event => animation?.toolEnd(event.toolCallId, event.isError));
-		pi.on("turn_end", event => { if (event.outcome === "error") animation?.turnError(); });
+		pi.on("input", event => animation?.userInput(event.text));
+		pi.on("turn_end", event => {
+			animation?.refreshContext();
+			if (event.outcome === "error") animation?.turnError();
+		});
 		pi.on("session_before_compact", () => animation?.compactStart());
 		pi.on("session_compact", event => animation?.compactEnd(event.willRetry));
 		pi.on("session_compact_failed", event => animation?.compactFailed(event.aborted));
@@ -63,14 +83,14 @@ export function createClawdExtension(options: ClawdExtensionOptions = {}) {
 		pi.on("session_shutdown", dispose);
 
 		pi.registerCommand("clawd", {
-			description: "Control Clawd: on, off, pause, resume, blink, or play an official animation",
+			description: "Control Clawd: on, off, pause, resume, blink, pet, or play an official animation",
 			getArgumentCompletions: (prefix) => {
 				if (prefix.startsWith("play ")) {
 					const name = prefix.slice(5).trimStart().toLowerCase();
 					const items = OFFICIAL_SPRITE_NAMES.filter(value => value.toLowerCase().startsWith(name));
 					return items.length ? items.map(value => ({ value: "play " + value, label: value })) : null;
 				}
-				const items = ["on", "off", "pause", "resume", "blink", "play"].filter((value) => value.startsWith(prefix));
+				const items = ["on", "off", "pause", "resume", "blink", "pet", "play"].filter((value) => value.startsWith(prefix));
 				return items.length ? items.map((value) => ({ value, label: value })) : null;
 			},
 			handler: async (args, ctx) => {
@@ -95,8 +115,9 @@ export function createClawdExtension(options: ClawdExtensionOptions = {}) {
 					case "pause": preferences.motion = false; break;
 					case "resume": preferences.motion = true; preferences.enabled = true; break;
 					case "blink": animation.blink(); return;
+					case "pet": if (!animation.pet()) ctx.ui.notify("Enable Clawd before petting it.", "info"); return;
 					default:
-						ctx.ui.notify("Usage: /clawd [on|off|pause|resume|blink|play <animation>]", "info");
+						ctx.ui.notify("Usage: /clawd [on|off|pause|resume|blink|pet|play <animation>]", "info");
 						return;
 				}
 				if (preferences.enabled === state.enabled && preferences.motion === state.motion) return;

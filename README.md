@@ -16,27 +16,33 @@ Pi footer 右侧的 Clawd：跟着 Agent 状态做小动作的官方像素动画
 - 固定的 **24×16 官方轮廓**，按真实字符单元像素等比缩放，不重画头身比例。
 - footer 右侧 8 列 × 2 行，透明 PNG；Unicode 占位符让两行 footer 文字都能正常选择、复制。
 - 图标右侧固定留 **1 列空白**：部分终端会丢失行尾单元格的组合字符，贴边时右钳会被裁掉。
-- 画布高于 footer 的动画临时使用 **8 列 × 2 行非捕获 overlay**，叠在编辑器底边框 + 输入行的右侧空白上，与 footer 组成 **8×4 舞台**；主体保持 2.25 倍标准体型，不放大也不压扁。overlay 只在播放期间存在，其余时间完全移除。
+- 画布高于 footer 的动画临时使用 **8 列 × 2 行非捕获 overlay**，叠在编辑器底边框 + 输入行的右侧空白上，与 footer 组成 **8×4 舞台**；overlay 按 footer 的真实屏幕行定位（内容不足一屏时也不会掉到 footer 下面），主体保持 2.25 倍标准体型，不放大也不压扁。overlay 只在播放期间存在，其余时间完全移除。
 - 没有捕获到兼容的两行 footer 时：Kitty 终端把同样的 **8×2 图标居中叠在原生 footer 的两行上**（非捕获 overlay），不额外占行，也不碰输入框；终端宽度小于 110 列时隐藏（原生 footer 的模型名会占到这里）。
 - 非 Kitty 终端没法在 2 行里保住像素块的大小，因此保持 `belowEditor` 的 **4 行文本半方块**（每像素 1 格宽 × 半格高，形状可辨，但占 4 行）。
 - 独立模式没有额外的编辑器行可用，高画布动画会等比缩放进这块区域。
 
-## 动画与状态
+## 动画与行为
 
-官方 **6.6395.0** 的 base＋delta 目录，**25 组**全部可按需解码和播放。
+官方 **6.6395.0** 的 base＋delta 目录，**25 组**全部可按需解码和播放。行为按社区常见的六类组织：
 
-| 状态 | 动画 |
-| --- | --- |
-| Agent 生成中 | `Desktop` 循环 |
-| 工具执行中 | `CrabWalking` 循环，并行工具全部结束后才返回生成状态 |
-| 完成 | `DancingHappy` 一次 |
-| compact | `Meditating` 循环 |
-| 出错 | `Facepalm` 一次后恢复当前状态 |
-| 空闲 | 原生眨眼／张望 + 随机短动画（约 4.5–8 秒一次） |
+| 类别 | 触发 | 动作 |
+| --- | --- | --- |
+| 工具映射 | `tool_execution_start` 的 `toolName` | `read`/`grep`/`find`/`ls` → `LookingAround`；`edit`/`write` → `Laptop`；`bash` → `Running`；`web_search`/`fetch_content` → `LookingAroundEyesOnly`；`agent`/`task` → `Waving`；`ask_user_question` → `Pointing`；`todo_write` → `Thinking`；其它 → `CrabWalking` |
+| 回合节点 | `agent_start`、流式输入、`turn_end`、`agent_settled` | 生成中 `Desktop`；steer／follow-up 提示 `Jumping`；正常结束 `DancingHappy`；中断 `Disappointed`；失败 `Facepalm`；compact `Meditating` |
+| 空闲小动作 | 眨眼独立每 4–7 秒一次；小动作每 6–10 秒一次（上下文紧张时 4–6 秒） | 眨眼不再占用小动作名额，避免一套动作里近一半都是眨眼；小动作池为左右看 + 8 组短动画（张望、扫视、转身、摇摆、走动、兴奋、呼啦、眩晕）与 5 组高画布（跳跃、挥手、灯泡、火花、彩带，低概率） |
+| 系统状态 | 上下文百分比、回合时长、时段 | ≥85% 触发一次 `Dizzy`；同一回合生成 ≥2 分钟改用 `Swaying`；空闲 10 分钟（夜间 3 分钟）进入 `Meditating` 慢速睡眠，任意事件唤醒 |
+| 交互 | `/clawd pet`、`Ctrl+Alt+C` | 随机 `Excited`／`Hula`／`Waving`／`DancingHappy` 一次，暂停时也可用 |
+| 场景／道具 | 工具类型与回合里程碑 | `Laptop`、`Desktop` 等自带道具的官方 clip；单回合工具 ≥12 次时，结束用 `Confetti` 场景代替普通舞蹈 |
 
-状态直接来自 Pi 的 `agent_start`、`agent_settled`、`tool_execution_*`、`turn_end` 和 compact 事件：**不让模型判断动画，也不产生额外模型请求**。
+节奏与防抖：
 
-状态机只使用 15 组短画布动画，避免工作中角色尺寸变化。另外 10 组高画布通过 `/clawd play` 单次播放：
+- 所有 clip 以官方 **12 fps** 播放；高画布 clip 借用 8×4 舞台，不放大主体。
+- 工具 clip **至少 20 帧（约 1.66 秒）**，避免毫秒级工具导致动作闪跳；最后一个工具结束后保留 **4 帧（约 0.33 秒）** 再切回生成动画，短暂间隙里的下一个工具不会打断动作。
+- 并行工具以**最后启动**的那个决定动作；工具结束后回到仍在运行的工具。
+
+状态直接来自 Pi 的 `agent_start`、`agent_settled`、`tool_execution_*`、`input`、`turn_end` 和 compact 事件：**不让模型判断动画，也不产生额外模型请求**。
+
+高画布的舞台取景：
 
 - `Waving`、`Pointing`、`Thinking`、`Jumping`、`JumpingHappy`、`Lightbulb`：100%
 - `Laptop`、`BreakDancing`：94%，`Spark`：91%
@@ -50,7 +56,9 @@ Pi footer 右侧的 Clawd：跟着 Agent 状态做小动作的官方像素动画
 | `/clawd on` / `off` | 显示／隐藏并停止计时器 |
 | `/clawd pause` / `resume` | 停止／恢复自动状态动画 |
 | `/clawd blink` | 眨眼一次（暂停也可用） |
+| `/clawd pet` | 摸一下，随机播放一个开心动作（暂停也可用） |
 | `/clawd play <名称>` | 播放任意一组官方动画，补全列出全部 25 组 |
+| `Ctrl+Alt+C` | 等同 `/clawd pet` |
 
 偏好作为本会话的扩展条目保存，`/reload` 或恢复会话后保留。命令不调用模型、不发聊天消息、不消耗 token，也不重建编辑器或清除输入草稿。
 
@@ -72,7 +80,7 @@ pi install npm:pi-cc-clawd
 
 ## 已知限制
 
-- overlay 会覆盖编辑器最后两行的右侧 8 列：存在 `belowEditor` widget 时会压到 widget；自动补全或 `/` 菜单展开时右侧 8 列可能被遮住。
+- overlay 会覆盖编辑器最后两行的右侧 8 列：编辑、子代理、提问、计划等带高画布道具的工具动作，以及 `/clawd play` 的高画布动画，都会临时占用这里；存在 `belowEditor` widget 时会压到 widget，自动补全或 `/` 菜单展开时右侧 8 列可能被遮住。
 - 播放高画布动画期间，选中编辑器最后一行右侧有像素的格子可能复制出占位符字符；footer 两行的复制不受影响。
 - 非 Kitty 终端没有 footer 显示（见上）。
 
@@ -87,7 +95,7 @@ npm run typecheck
 npm run preview
 ```
 
-当前 **81 个测试**通过，覆盖：全部 25 组素材的 base／delta 解码、15 组 footer 动画、8×4 舞台（占位符行号、体型不变性、边框掩码、overlay 生命周期）、Agent 状态转换、并行工具、偏好恢复、PNG／文本渲染、footer 尺寸与 fallback，以及 regular/fullscreen 两种真实渲染器上的选择与复制。
+当前 **106 个测试**通过，覆盖：全部 25 组素材的 base／delta 解码、15 组 footer 动画、8×4 舞台（占位符行号、体型不变性、边框掩码、overlay 生命周期）、六类触发（工具映射、回合收尾、空闲时钟与动作池、上下文／长回合／睡眠、交互、彩带里程碑）、并行工具、偏好恢复、PNG／文本渲染、footer 尺寸与 fallback，以及 regular/fullscreen 两种真实渲染器上的选择与复制。
 
 ## 版权
 

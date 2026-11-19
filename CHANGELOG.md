@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 - 2026-11-19
+
+- Map each tool family to its own official clip: reading, editing (laptop scene), shell, web search, subagents, questions and todo plans, with the crab walk as the default.
+- Hold every tool clip for at least 20 frames and keep it through a four-frame gap between tools, so millisecond tools no longer restart the animation; parallel tools follow the latest one.
+- Add turn-node endings: a steer prompt hops, an aborted turn plays Disappointed, and a busy turn (12+ tools) ends with the confetti scene.
+- Split idle into an ambient blink clock (4-7 s) and a separate act pool (6-10 s) of short and tall official clips, so blinks no longer take half the repertoire; add one dizzy reaction when the context passes 85%, a tired sway after two minutes, and a slow sleeping loop after ten quiet minutes (three at night).
+- Add `/clawd pet` and the Ctrl+Alt+C shortcut for interaction; the shortcut works while motion is paused.
+- Fix pause/off being defeated when the last tool ends, and let a crowded crossing wait until the mascot is running again.
+- Give millisecond tools their full 20-frame hold, reuse the running loop for the same tool family, request redraws in standalone Kitty mode, keep the stage off the prompt while it holds typed text, and anchor the stage to the footer's real row so a short session can no longer put it below its own body.
+- Keep the six behaviour groups documented in the README and cover each with animation tests (106 tests total).
+
 ## 0.5.1 - 2026-11-19
 
 - Standalone mode without a decoratable footer now keeps the 8×2 glyph centered over the native footer instead of reserving a `belowEditor` row; the overlay hides below 110 columns where the footer's model label reaches the middle.

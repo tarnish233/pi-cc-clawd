@@ -126,6 +126,7 @@ export async function extensionHarness(mode = "tui", baseFactory) {
 	const pi = {
 		on(name, handler) { const list = handlers.get(name) ?? []; list.push(handler); handlers.set(name,list); return () => {}; },
 		registerCommand: (name, command) => commands.set(name, command),
+		registerShortcut: () => {},
 		appendEntry: (customType,data) => entries.push({ type: "custom", customType, data: structuredClone(data) }),
 		getAllTools: () => [], getCommands: () => [], getSettings: () => ({}),
 		registerTool: forbidden, sendUserMessage: forbidden, sendMessage: forbidden,

@@ -91,6 +91,17 @@ const KITTY_PLACEHOLDER = "\u{10eeee}";
 // relying on left-to-right inheritance when Pi slices or highlights a row.
 const ROW_COLUMN_DIACRITICS = ["\u0305", "\u030d", "\u030e", "\u0310", "\u0312", "\u033d", "\u033e", "\u033f"];
 
+/** Row marks used only by the footer's two placeholder rows (stage rows 2 and 3). */
+export const FOOTER_PLACEHOLDER_MARKS: readonly string[] = [
+	ROW_COLUMN_DIACRITICS[STAGE_ROWS - CLAWD_ROWS]!,
+	ROW_COLUMN_DIACRITICS[STAGE_ROWS - CLAWD_ROWS + 1]!,
+];
+
+/** True when a screen line holds footer placeholder cells (not stage rows 0/1). */
+export function hasFooterPlaceholder(line: string): boolean {
+	return FOOTER_PLACEHOLDER_MARKS.some(mark => line.includes(KITTY_PLACEHOLDER + mark));
+}
+
 /** The same source pixels, rendered either as a small PNG or lossless half-blocks. */
 export class ClawdPortrait implements Component {
 	private cachedTheme: Theme | undefined;

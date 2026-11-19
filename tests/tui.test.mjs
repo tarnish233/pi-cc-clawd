@@ -97,8 +97,9 @@ for(const fullscreen of [false,true]) {
 		const screen=()=>fullscreen?tui.getScreenLines():tui.captureRenderState().previousLines;
 		try {
 			tui.renderNow();assert.equal(editor.render(80).length,3);assert.equal(tui.hasOverlay(),false);
-			animation.playOfficial("Thinking");tui.renderNow();assert.equal(tui.hasOverlay(),true);
+			animation.playOfficial("Thinking");
 			for(let i=0;i<6;i++)queue.shift()?.();
+			tui.renderNow();assert.equal(tui.hasOverlay(),true);
 			tui.renderNow();
 			const rows=screen().map(stripTerminalSequences);
 			const footerRow=rows.findIndex(line=>line.includes("cwd · main"));
@@ -107,13 +108,15 @@ for(const fullscreen of [false,true]) {
 			assert(rows[footerRow].includes("\u{10eeee}"));assert(rows[footerRow-1].includes("\u{10eeee}"));
 			assert(rows[footerRow-2].includes("\u{10eeee}"));assert(rows[footerRow-2].includes("─"));
 			assert(screen().every(line=>!line.includes("\x1b_G")));assert(terminal.output.includes("a=T,U=1"));
+			// The next snapshots contain this stage's own cells; it must stay mounted.
+			for(let i=0;i<8;i++){queue.shift()?.();tui.renderNow();assert.equal(tui.hasOverlay(),true);}
 			animation.setPreferences({enabled:false,motion:true});placement.refresh();tui.renderNow();
 			assert.equal(tui.hasOverlay(),false);assert(screen().every(line=>!line.includes("\u{10eeee}")));
 			// A one-row stage (Waving) must leave the editor's input line untouched.
-			animation.setPreferences({enabled:true,motion:true});placement.refresh();
-			animation.playOfficial("Waving");tui.renderNow();assert.equal(tui.hasOverlay(),true);
-			for(let i=0;i<10;i++)queue.shift()?.();
-			tui.renderNow();
+			animation.setPreferences({enabled:true,motion:true});placement.refresh();tui.renderNow();
+			animation.playOfficial("Waving");
+			for(let i=0;i<9;i++)queue.shift()?.();
+			tui.renderNow();assert.equal(tui.hasOverlay(),true);
 			const waving=screen().map(stripTerminalSequences);
 			const wavingFooter=waving.findIndex(line=>line.includes("cwd · main"));
 			assert(waving[wavingFooter].includes("\u{10eeee}"));assert(waving[wavingFooter-1].includes("\u{10eeee}"));
@@ -140,5 +143,47 @@ for(const protocol of [null,"kitty"])for(const fullscreen of [false,true]) {
 			terminal.columns=27;terminal.resize();tui.renderNow(true);assert.equal(portrait.render(27).length,0);
 			assert(screen().map(stripTerminalSequences).some(line=>line.includes("original footer two")));
 		}finally{tui.stop();}
+	});
+}
+
+for (const fullscreen of [false, true]) {
+	test("real " + (fullscreen ? "fullscreen" : "regular") + " renderer keeps the stage off while the session is shorter than the screen", async () => {
+		const env = await makeEditorEnvironment(); setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true }); setCellDimensions({ widthPx: 9, heightPx: 18 });
+		const terminal = new Terminal(); const tui = fullscreen ? new TuiAltScreen(terminal, false, undefined, { copyOnSelect: false }) : new TuiMainScreen(terminal);
+		const editor = new CustomEditor(tui, env.editorTheme, env.keybindings, { embedWorkingStatus: true }); editor.setText("hello");
+		const queue = []; const schedule = callback => { queue.push(callback); return () => {}; };
+		let placement;
+		const animation = new ClawdAnimation(() => placement.refresh(), schedule, () => 0);
+		const statuses = new Map(); let footer;
+		const footerData = { getExtensionStatuses: () => new Map(statuses), getGitBranch: () => "main", getAvailableProviderCount: () => 1, onBranchChange: () => () => {} };
+		const ctx = { ui: {
+			get theme() { return env.theme; },
+			getEditorText: () => editor.getText(),
+			setFooter(factory) { footer = factory?.(tui, env.theme, footerData); },
+			setStatus(key, text) { if (text === undefined) statuses.delete(key); else statuses.set(key, text); },
+			setWidget() {},
+		} };
+		placement = new FooterPlacement(ctx, animation); placement.prepare();
+		ctx.ui.setFooter(() => ({ render: () => ["model", "cwd · main · " + (statuses.get(CLAWD_FOOTER_KEY) ?? "")], invalidate() {} }));
+		placement.mountDefault(); animation.start();
+		const filler = { render: () => Array.from({ length: terminal.rows - 12 }, () => " ".repeat(80)), invalidate() {} };
+		const children = [filler, editor, footer];
+		if (fullscreen) tui.setLayoutRoot(new VStack(children)); else for (const child of children) tui.addChild(child);
+		tui.setFocus(editor); tui.start();
+		try {
+			tui.renderNow();
+			animation.playOfficial("Confetti");
+			for (let i = 0; i < 9; i++) queue.shift()?.();
+			tui.renderNow();
+			assert.equal(tui.hasOverlay(), true);
+			const rows = (fullscreen ? tui.getScreenLines() : tui.captureRenderState().previousLines).map(stripTerminalSequences);
+			const footerRow = rows.findIndex(line => line.includes("cwd · main"));
+			assert(footerRow > 3);
+			assert(rows[footerRow - 2].includes("\u{10eeee}"));
+			assert(rows[footerRow - 3].includes("\u{10eeee}"));
+			assert(rows.slice(footerRow + 1).every(line => !line.includes("\u{10eeee}")));
+		} finally {
+			tui.stop(); animation.dispose(); placement.dispose();
+		}
 	});
 }

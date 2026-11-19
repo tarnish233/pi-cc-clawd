@@ -129,14 +129,16 @@ test("agent events and play commands render official frames without touching the
 	await h.emitRaw("tool_execution_end",{toolCallId:"tool-1",isError:false});
 	await h.emitRaw("agent_settled",{aborted:false});clock.advance(3400);
 	await h.command("play Waving");assert.equal(h.notices.length,0);assert.equal(clock.jobs.size,1);
-	assert.equal(h.tui.overlays.length,1);
-	const overlay=h.tui.overlays[0];
+	clock.advance(900);
+	const active=h.tui.overlays.filter(candidate=>!candidate.removed);
+	assert.equal(active.length,1);
+	const overlay=active[0];
 	assert.equal(overlay.options.anchor,"bottom-right");
 	assert.equal(overlay.options.width,CLAWD_COLUMNS);
 	assert.equal(overlay.options.maxHeight,OVERLAY_ROWS);
 	assert.equal(overlay.options.nonCapturing,true);
-	assert.deepEqual(overlay.options.margin,{right:1,bottom:CLAWD_ROWS});
-	clock.advance(900);
+	assert.deepEqual(overlay.options.margin,{right:1});
+	assert.equal(typeof overlay.options.row,"number");
 	const stage=overlay.component.render(CLAWD_COLUMNS);
 	assert.equal(stage.length,1);assert(stage[0].includes("\u{10eeee}"));assert(stage[0].includes("─"));
 	await h.command("play Hula");assert.equal(h.notices.length,0);assert.equal(clock.jobs.size,1);
@@ -157,9 +159,61 @@ test("tree preference restores do not reset live agent activity or tool tracking
 test("bad arguments and no-op controls don't persist entries or disturb other UI",async()=>{
 	const {h,clock}=await setup("tui",true);await h.emit("session_start");await h.command("on");assert.equal(h.entries.length,0);
 	await h.command("unknown");assert.equal(h.notices.length,1);assert.equal(h.entries.length,0);assert.equal(h.footerSets,1);
-	const completions=h.commands.get("clawd").getArgumentCompletions("p");assert.deepEqual(completions,[{value:"pause",label:"pause"},{value:"play",label:"play"}]);
+	const completions=h.commands.get("clawd").getArgumentCompletions("p");assert.deepEqual(completions,[{value:"pause",label:"pause"},{value:"pet",label:"pet"},{value:"play",label:"play"}]);
 	assert.deepEqual(h.commands.get("clawd").getArgumentCompletions("play Dan"),[{value:"play DancingHappy",label:"DancingHappy"}]);
 	assert.deepEqual(h.commands.get("clawd").getArgumentCompletions("play  Dan"),[{value:"play DancingHappy",label:"DancingHappy"}]);
 	assert.equal(h.commands.get("clawd").getArgumentCompletions("play ").length,25);
 	await h.emit("session_shutdown");clock.advance(20000);assert.equal(clock.jobs.size,0);
+});
+
+test("standalone Kitty animations ask Pi to redraw", async () => {
+	const { h } = await setup(); await h.emit("session_start"); await Promise.resolve();
+	assert.equal(h.tui.overlays.length, 1);
+	const before = h.tui.renders;
+	await h.command("pet");
+	assert(h.tui.renders > before);
+	await h.emit("session_shutdown");
+});
+
+test("the stage hides while the footer input line reaches its columns", async () => {
+	const { h, clock } = await setup("tui", true); await h.emit("session_start");
+	await h.command("play Confetti");
+	for (let i = 0; i < 9; i++) clock.advance(84);
+	const footer = h.footer.render(80);
+	const lines = Array.from({ length: h.tui.terminal.rows }, () => "");
+	lines[lines.length - 2] = footer[0]; lines[lines.length - 1] = footer[1];
+	h.tui.getScreenLines = () => lines;
+	lines[lines.length - 4] = "x".repeat(78);
+	clock.advance(84);
+	assert.equal(h.tui.overlays.filter(candidate => !candidate.removed).length, 0);
+	lines[lines.length - 4] = "x".repeat(71) + "\x1b[7m \x1b[27m";
+	clock.advance(84);
+	assert.equal(h.tui.overlays.filter(candidate => !candidate.removed).length, 0); // the cursor cell counts
+	lines[lines.length - 4] = "x".repeat(70) + "\x1b[7m你\x1b[27m";
+	clock.advance(84);
+	assert.equal(h.tui.overlays.filter(candidate => !candidate.removed).length, 0); // a wide cursor counts two cells
+	lines[lines.length - 4] = "x".repeat(10);
+	clock.advance(84);
+	const active = h.tui.overlays.filter(candidate => !candidate.removed);
+	assert.equal(active.length, 1);
+	assert.equal(active[0].options.row, lines.length - 4);
+	await h.emit("session_shutdown");
+});
+
+
+test("a clipped or hidden footer never moves the stage above it", async () => {
+	const { h, clock } = await setup("tui", true); await h.emit("session_start");
+	const footer = h.footer.render(80);
+	const lines = Array.from({ length: h.tui.terminal.rows }, () => "");
+	lines[lines.length - 1] = footer[1]; // one visible footer row
+	h.tui.getScreenLines = () => lines;
+	await h.command("play Confetti");
+	for (let i = 0; i < 9; i++) clock.advance(84);
+	const active = h.tui.overlays.filter(candidate => !candidate.removed);
+	assert.equal(active.length, 1);
+	assert.equal(active[0].options.row, lines.length - 3);
+	lines.fill("");
+	clock.advance(84);
+	assert.equal(h.tui.overlays.filter(candidate => !candidate.removed).length, 0);
+	await h.emit("session_shutdown");
 });
